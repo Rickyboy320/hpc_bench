@@ -1,0 +1,10 @@
+#!/bin/sh
+#SBATCH --time=00:15:00
+#SBATCH -N 2
+#SBATCH --ntasks-per-node=16
+#SBATCH --gres=gpu:1
+
+module load openmpi/gcc/64/1.10.3
+module load cuda10.0/toolkit/10.0.130
+
+mpirun -N 1 ./vector

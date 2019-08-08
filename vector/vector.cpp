@@ -9,38 +9,14 @@
 #include <sys/syscall.h>
 #include <sys/types.h>
 
+#include "common.h"
+
 #define N 50
-
-#define cudaCheck(ans) { cudaAssert((ans), __FILE__, __LINE__); }
-inline void cudaAssert(cudaError_t code, const char *file, int line, bool abort=true)
-{
-    if (code != cudaSuccess)
-    {
-        fprintf(stderr,"CUDA: %s %s %d\n", cudaGetErrorString(code), file, line);
-        if (abort)
-        {
-            exit(code);
-        }
-    }
-}
-
-struct task_t {
-    int size;
-    float* A;
-    float* B;
-    float* C;
-};
-
 
 void init_openmp()
 {
     omp_set_num_threads(omp_get_num_procs());
     printf("Number procs: %d\n", omp_get_num_procs());
-}
-
-void init_cuda()
-{
-
 }
 
 int init_mpi()
@@ -69,26 +45,12 @@ void* run_openmp(void* v_task)
     float* C = task->C;
     int size = task->size;
 
-    for(int i = 0; i < size; i++)
-    {
-        printf("%f %f %f\n", C[i], A[i], B[i]);
-    }
-
     int i;
     #pragma omp parallel for private(i) shared(A,B,C)
     for (i = 0; i < size; i++)
     {
         C[i] = A[i] + B[i];
     }
-
-    printf("Evaluated size: %d\n", size);
-
-    pthread_exit(NULL);
-}
-
-void* run_cuda(void* v_task)
-{
-    task_t* task = (task_t*) v_task;
 
     pthread_exit(NULL);
 }
@@ -135,15 +97,9 @@ int main()
 
 
     // Distribute tasks evenly over CPU (OpenMP) and GPUs (CUDA)
-    int gpu_count;
-    cudaError_t cerr = cudaGetDeviceCount(&gpu_count);
-    if(cerr == cudaErrorNoDevice) {
-        gpu_count = 0;
-    } else {
-        cudaCheck(cerr);
-    }
+    int gpu_count = init_cuda();
 
-    printf("Count GPU devices: %d\n", gpu_count);
+    printf("Rank: %d: Count GPU devices: %d\n", rank, gpu_count);
 
     pthread_t threads[gpu_count + 1];
     task_t tasks[gpu_count + 1];
@@ -163,11 +119,10 @@ int main()
     gettimeofday(&tv1, &tz);
 
 
-
     int err = pthread_create(&threads[0], NULL, run_openmp, &tasks[0]);
     if (err != 0)
     {
-        printf("Error on create: %d\n", err);
+        printf("Rank: %d: Error on create: %d\n", rank, err);
     }
 
     for(int i = 1; i <= gpu_count; i++)
@@ -175,7 +130,7 @@ int main()
         int err = pthread_create(&threads[i], NULL, run_cuda, &tasks[i]);
         if (err != 0)
         {
-            printf("Error on create: %d\n", err);
+            printf("Rank: %d: Error on create: %d\n", rank, err);
         }
     }
 
@@ -203,11 +158,15 @@ int main()
     elapsed = (double) (tv2.tv_sec-tv1.tv_sec) + (double) (tv2.tv_usec-tv1.tv_usec) * 1.e-6;
     if(rank == 0)
     {
-        printf("elapsed time = %f seconds.\n", elapsed);
+        printf("Elapsed time = %f seconds.\n", elapsed);
 
-        for (i = 0; i < 2*N; i++)
+        for (int i = 0; i < 2*N; ++i)
         {
-            printf("%d: %f\n", i, C[i]);
+            if (fabs(A[i] + B[i] - C[i]) > 1e-5)
+            {
+                fprintf(stderr, "Result verification failed at element %d!\n", i);
+                exit(EXIT_FAILURE);
+            }
         }
     }
 

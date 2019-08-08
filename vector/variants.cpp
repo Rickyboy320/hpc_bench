@@ -86,7 +86,6 @@ void run_openmp_variant(int rank, int gpu_count, task_t tasks[])
 
 void run_cuda_variant(int rank, int gpu_count, task_t tasks[])
 {
-    // Init CUDA 'stream'
     cudaStream_t* streams = run_cuda_streams(gpu_count, tasks);
 
     run_openmp(&tasks[0]);

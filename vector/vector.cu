@@ -27,6 +27,7 @@ vectorAdd(const float *A, const float *B, float *C, int size)
     }
 }
 
+// Allocate cuda memory and pin host memory (required for async stream).
 void alloc_cuda(task_t* task)
 {
     int size = task->size;
@@ -43,6 +44,7 @@ void alloc_cuda(task_t* task)
     cudaCheck(cudaMalloc((void **)&task->cudamem.C, task->cudamem.size));
 }
 
+// Deallocate cuda memory and unpin host memory.
 void dealloc_cuda(task_t* task)
 {
     // Free device global memory
@@ -55,6 +57,7 @@ void dealloc_cuda(task_t* task)
     cudaCheck(cudaFree(task->cudamem.C));
 }
 
+// Run cuda kernel asynchronously on the given stream.
 void run_cuda_stream(task_t task, cudaStream_t stream)
 {
     // Copy the host input vectors A and B H2D.
@@ -71,6 +74,7 @@ void run_cuda_stream(task_t task, cudaStream_t stream)
     cudaCheck(cudaMemcpyAsync(task.C, task.cudamem.C, task.cudamem.size, cudaMemcpyDeviceToHost, stream));
 }
 
+// Run the cuda task (on the 'thread stream').
 void* run_cuda(void* v_task)
 {
     task_t* task = (task_t*) v_task;
@@ -88,6 +92,7 @@ void* run_cuda(void* v_task)
     }
 }
 
+// Create and run streams for each of the tasks.
 cudaStream_t* run_cuda_streams(int gpu_count, task_t tasks[])
 {
     cudaStream_t* streams = (cudaStream_t*) malloc(sizeof(cudaStream_t) * gpu_count);
@@ -101,6 +106,7 @@ cudaStream_t* run_cuda_streams(int gpu_count, task_t tasks[])
     return streams;
 }
 
+// Syncrhonize and delete all streams.
 void sync_cuda_streams(int gpu_count, cudaStream_t* streams)
 {
     for(int i = 0; i < gpu_count; i++)
@@ -112,6 +118,7 @@ void sync_cuda_streams(int gpu_count, cudaStream_t* streams)
     free(streams);
 }
 
+// Get the number of available GPUs.
 int init_cuda()
 {
     int gpu_count;

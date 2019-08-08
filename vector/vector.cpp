@@ -65,6 +65,7 @@ void* run_openmp(void* v_task)
 
 int main(int argc, char** argv)
 {
+    // Parse command line args
     Variant variant = openmp;
     for(int i = 1; i < argc; i++)
     {
@@ -93,8 +94,6 @@ int main(int argc, char** argv)
     int rank = init_mpi();
     init_openmp();
 
-    // Init array
-
     int start = rank == 0 ? 0 : N;
     int receive = rank == 0 ? N : 0;
 
@@ -104,7 +103,7 @@ int main(int argc, char** argv)
         B[i] = rank + 1;
     }
 
-    // Synchronize halfs of array with other node.
+    // Synchronize halfs of array with other node. (To demonstrate that MPI works)
     MPI_Request requests[2];
     MPI_Irecv(&A[receive], N, MPI_FLOAT, (rank + 1) % 2, 0, MPI_COMM_WORLD, &requests[0]);
     MPI_Irecv(&B[receive], N, MPI_FLOAT, (rank + 1) % 2, 0, MPI_COMM_WORLD, &requests[1]);
@@ -116,7 +115,7 @@ int main(int argc, char** argv)
     MPI_Waitall(2, requests, statusses);
 
 
-    // Distribute tasks evenly over CPU (OpenMP) and GPUs (CUDA)
+    // Distribute tasks evenly over CPU (OpenMP) and available GPUs (CUDA)
     int gpu_count = init_cuda();
 
     printf("Rank: %d: Count GPU devices: %d\n", rank, gpu_count);
@@ -133,6 +132,7 @@ int main(int argc, char** argv)
         tasks[i].size = sizePerDevice;
     }
 
+    // Allocate GPU memory for the CUDA tasks
     for(int i = 1; i < gpu_count + 1; i++)
     {
         alloc_cuda(&tasks[i]);
@@ -142,7 +142,7 @@ int main(int argc, char** argv)
     MPI_Barrier(MPI_COMM_WORLD);
 
 
-    // Start benchmark
+    // Start benchmark                 ========================================
     gettimeofday(&tv1, &tz);
 
     // Run tasks
@@ -171,13 +171,14 @@ int main(int argc, char** argv)
 
 
     gettimeofday(&tv2, &tz);
-    // End benchmark
+    // End benchmark                   ========================================
 
     for(int i = 1; i < gpu_count + 1; i++)
     {
         dealloc_cuda(&tasks[i]);
     }
 
+    // Communicate result over MPI & verify.
     MPI_Request request;
     MPI_Irecv(&C[receive], N, MPI_FLOAT, (rank + 1) % 2, 0, MPI_COMM_WORLD, &request);
     MPI_Send(&C[start], N, MPI_FLOAT, (rank + 1) % 2, 0, MPI_COMM_WORLD);

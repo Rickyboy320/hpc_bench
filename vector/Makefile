@@ -5,7 +5,7 @@ SRC = vector.cpp variants.cpp
 NVSRC = vector.cu
 
 CC_FLAGS = -O3 -I/cm/shared/apps/cuda10.0/toolkit/10.0.130/include/ -L/cm/shared/apps/cuda10.0/toolkit/10.0.130/lib64
-NVCC_FLAGS =
+NVCC_FLAGS = --default-stream per-thread
 LL_FLAGS = -fopenmp -lcudart
 
 EXE = vector
@@ -17,4 +17,4 @@ debug: $(SRC)
 
 
 clean: $(SRC)
-	rm -f $(EXE) $(EXE).linkinfo result* main.o
+	rm -f $(EXE) $(EXE).linkinfo result* *.o *.out

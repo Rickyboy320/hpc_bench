@@ -3,13 +3,14 @@
 #include <math.h>
 #include <omp.h>
 #include <mpi.h>
+#include <string.h>
 #include <sys/time.h>
 #include <cuda_runtime_api.h>
 
 #include "variants.h"
 #include "common.h"
 
-#define N 9999999
+#define N 1000
 
 void init_openmp()
 {
@@ -52,11 +53,33 @@ void* run_openmp(void* v_task)
         C[i] = A[i] + B[i];
     }
 
-    pthread_exit(NULL);
+    if(task->is_threads)
+    {
+        pthread_exit(NULL);
+    }
+    else
+    {
+        return NULL;
+    }
 }
 
-int main()
+int main(int argc, char** argv)
 {
+    Variant variant = openmp;
+    for(int i = 1; i < argc; i++)
+    {
+        char* arg = argv[i];
+        if(strcmp(arg, "--openmp") == 0) {
+            variant = openmp;
+        } else if(strcmp(arg, "--pthreads") == 0) {
+            variant = pthreads;
+        } else if(strcmp(arg, "--cthreads") == 0) {
+            variant = cthreads;
+        } else if(strcmp(arg, "--cuda") == 0) {
+            variant = cuda;
+        }
+    }
+
     // Initialize vectors
     float A[N*2];
     float B[N*2];
@@ -118,7 +141,25 @@ int main()
     gettimeofday(&tv1, &tz);
 
     // Run tasks
-    run_pthread_variant(rank, gpu_count, tasks);
+    switch(variant)
+    {
+        case pthreads:
+            printf("Selected variant: pthreads\n");
+            run_pthread_variant(rank, gpu_count, tasks);
+            break;
+        case cthreads:
+            printf("Selected variant: c++ threads\n");
+            run_cthread_variant(rank, gpu_count, tasks);
+            break;
+        case openmp:
+            printf("Selected variant: OpenMP threads\n");
+            run_openmp_variant(rank, gpu_count, tasks);
+            break;
+        case cuda:
+            printf("Selected variant: CUDA streams\n");
+            run_cuda_variant(rank, gpu_count, tasks);
+            break;
+    }
 
     //  Sync to wait on all processes.
     MPI_Barrier(MPI_COMM_WORLD);

@@ -7,4 +7,4 @@
 module load openmpi/gcc/64/1.10.3
 module load cuda10.0/toolkit/10.0.130
 
-mpirun -N 1 ./vector
+mpirun -N 1 ./vector "$@"

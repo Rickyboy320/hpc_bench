@@ -10,7 +10,7 @@
 #include "variants.h"
 #include "common.h"
 
-#define N 1000
+#define N 1000000000
 
 void init_openmp()
 {
@@ -133,6 +133,11 @@ int main(int argc, char** argv)
         tasks[i].size = sizePerDevice;
     }
 
+    for(int i = 1; i < gpu_count + 1; i++)
+    {
+        alloc_cuda(&tasks[i]);
+    }
+
     //  Sync for 'equal' starts.
     MPI_Barrier(MPI_COMM_WORLD);
 
@@ -168,6 +173,10 @@ int main(int argc, char** argv)
     gettimeofday(&tv2, &tz);
     // End benchmark
 
+    for(int i = 1; i < gpu_count + 1; i++)
+    {
+        dealloc_cuda(&tasks[i]);
+    }
 
     MPI_Request request;
     MPI_Irecv(&C[receive], N, MPI_FLOAT, (rank + 1) % 2, 0, MPI_COMM_WORLD, &request);

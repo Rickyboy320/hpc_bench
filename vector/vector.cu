@@ -27,46 +27,48 @@ vectorAdd(const float *A, const float *B, float *C, int size)
     }
 }
 
-void run_cuda_stream(task_t task, cudaStream_t stream)
+void alloc_cuda(task_t* task)
 {
-    int size = task.size;
-    size_t byteSize = size * sizeof(float);
+    int size = task->size;
+
+    task->cudamem.size = size * sizeof(float);
 
     // Allocate the device vectors
-    float *d_A = NULL;
-    float *d_B = NULL;
-    float *d_C = NULL;
-    cudaCheck(cudaHostRegister(task.A, byteSize, 0));
-    cudaCheck(cudaHostRegister(task.B, byteSize, 0));
-    cudaCheck(cudaHostRegister(task.C, byteSize, 0));
+    cudaCheck(cudaHostRegister(task->A, task->cudamem.size, 0));
+    cudaCheck(cudaHostRegister(task->B, task->cudamem.size, 0));
+    cudaCheck(cudaHostRegister(task->C, task->cudamem.size, 0));
 
-    cudaCheck(cudaMalloc((void **)&d_A, byteSize));
-    cudaCheck(cudaMalloc((void **)&d_B, byteSize));
-    cudaCheck(cudaMalloc((void **)&d_C, byteSize));
+    cudaCheck(cudaMalloc((void **)&task->cudamem.A, task->cudamem.size));
+    cudaCheck(cudaMalloc((void **)&task->cudamem.B, task->cudamem.size));
+    cudaCheck(cudaMalloc((void **)&task->cudamem.C, task->cudamem.size));
+}
 
+void dealloc_cuda(task_t* task)
+{
+    // Free device global memory
+    cudaCheck(cudaHostUnregister(task->A));
+    cudaCheck(cudaHostUnregister(task->B));
+    cudaCheck(cudaHostUnregister(task->C));
+
+    cudaCheck(cudaFree(task->cudamem.A));
+    cudaCheck(cudaFree(task->cudamem.B));
+    cudaCheck(cudaFree(task->cudamem.C));
+}
+
+void run_cuda_stream(task_t task, cudaStream_t stream)
+{
     // Copy the host input vectors A and B H2D.
-    cudaCheck(cudaMemcpyAsync(d_A, task.A, byteSize, cudaMemcpyHostToDevice, stream));
-    cudaCheck(cudaMemcpyAsync(d_B, task.B, byteSize, cudaMemcpyHostToDevice, stream));
+    cudaCheck(cudaMemcpyAsync(task.cudamem.A, task.A, task.cudamem.size, cudaMemcpyHostToDevice, stream));
+    cudaCheck(cudaMemcpyAsync(task.cudamem.B, task.B, task.cudamem.size, cudaMemcpyHostToDevice, stream));
 
     // Launch the vector-add CUDA Kernel
     int threadsPerBlock = 256;
-    int blocksPerGrid = (size + threadsPerBlock - 1) / threadsPerBlock;
-    vectorAdd<<<blocksPerGrid, threadsPerBlock, 0, stream>>>(d_A, d_B, d_C, size);
+    int blocksPerGrid = (task.size + threadsPerBlock - 1) / threadsPerBlock;
 
-    cudaCheck(cudaStreamSynchronize(stream));
+    vectorAdd<<<blocksPerGrid, threadsPerBlock, 0, stream>>>(task.cudamem.A, task.cudamem.B, task.cudamem.C, task.size);
 
     // Copy the device result vector D2H.
-    cudaCheck(cudaMemcpyAsync(task.C, d_C, byteSize, cudaMemcpyDeviceToHost, stream));
-
-    // Free device global memory
-    cudaCheck(cudaHostUnregister(task.A));
-    cudaCheck(cudaHostUnregister(task.B));
-    cudaCheck(cudaHostUnregister(task.C));
-
-    cudaCheck(cudaFree(d_A));
-    cudaCheck(cudaFree(d_B));
-    cudaCheck(cudaFree(d_C));
-
+    cudaCheck(cudaMemcpyAsync(task.C, task.cudamem.C, task.cudamem.size, cudaMemcpyDeviceToHost, stream));
 }
 
 void* run_cuda(void* v_task)
@@ -74,6 +76,7 @@ void* run_cuda(void* v_task)
     task_t* task = (task_t*) v_task;
 
     run_cuda_stream(*task, cudaStreamPerThread);
+    cudaCheck(cudaStreamSynchronize(cudaStreamPerThread));
 
     if(task->is_threads)
     {
@@ -102,6 +105,7 @@ void sync_cuda_streams(int gpu_count, cudaStream_t* streams)
 {
     for(int i = 0; i < gpu_count; i++)
     {
+        cudaCheck(cudaStreamSynchronize(streams[i]));
         cudaCheck(cudaStreamDestroy(streams[i]));
     }
 

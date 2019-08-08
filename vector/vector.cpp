@@ -1,4 +1,3 @@
-#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -6,17 +5,16 @@
 #include <mpi.h>
 #include <sys/time.h>
 #include <cuda_runtime_api.h>
-#include <sys/syscall.h>
-#include <sys/types.h>
 
+#include "variants.h"
 #include "common.h"
 
-#define N 50
+#define N 9999999
 
 void init_openmp()
 {
     omp_set_num_threads(omp_get_num_procs());
-    printf("Number procs: %d\n", omp_get_num_procs());
+    printf("Number omp procs: %d\n", omp_get_num_procs());
 }
 
 int init_mpi()
@@ -39,12 +37,14 @@ int init_mpi()
 
 void* run_openmp(void* v_task)
 {
+    // Unpack task
     task_t* task = (task_t*) v_task;
     float* A = task->A;
     float* B = task->B;
     float* C = task->C;
     int size = task->size;
 
+    // Run task (vector addition) with OpenMP
     int i;
     #pragma omp parallel for private(i) shared(A,B,C)
     for (i = 0; i < size; i++)
@@ -57,6 +57,7 @@ void* run_openmp(void* v_task)
 
 int main()
 {
+    // Initialize vectors
     float A[N*2];
     float B[N*2];
     float C[N*2];
@@ -67,6 +68,7 @@ int main()
 	double elapsed;
 
     int rank = init_mpi();
+    init_openmp();
 
     // Init array
 
@@ -80,7 +82,6 @@ int main()
     }
 
     // Synchronize halfs of array with other node.
-
     MPI_Request requests[2];
     MPI_Irecv(&A[receive], N, MPI_FLOAT, (rank + 1) % 2, 0, MPI_COMM_WORLD, &requests[0]);
     MPI_Irecv(&B[receive], N, MPI_FLOAT, (rank + 1) % 2, 0, MPI_COMM_WORLD, &requests[1]);
@@ -92,16 +93,11 @@ int main()
     MPI_Waitall(2, requests, statusses);
 
 
-    //  Sync for 'equal' starts.
-    MPI_Barrier(MPI_COMM_WORLD);
-
-
     // Distribute tasks evenly over CPU (OpenMP) and GPUs (CUDA)
     int gpu_count = init_cuda();
 
     printf("Rank: %d: Count GPU devices: %d\n", rank, gpu_count);
 
-    pthread_t threads[gpu_count + 1];
     task_t tasks[gpu_count + 1];
 
     int sizePerDevice = ceil(N / (gpu_count + 1.0));
@@ -114,38 +110,22 @@ int main()
         tasks[i].size = sizePerDevice;
     }
 
+    //  Sync for 'equal' starts.
+    MPI_Barrier(MPI_COMM_WORLD);
+
 
     // Start benchmark
     gettimeofday(&tv1, &tz);
 
+    // Run tasks
+    run_pthread_variant(rank, gpu_count, tasks);
 
-    int err = pthread_create(&threads[0], NULL, run_openmp, &tasks[0]);
-    if (err != 0)
-    {
-        printf("Rank: %d: Error on create: %d\n", rank, err);
-    }
-
-    for(int i = 1; i <= gpu_count; i++)
-    {
-        int err = pthread_create(&threads[i], NULL, run_cuda, &tasks[i]);
-        if (err != 0)
-        {
-            printf("Rank: %d: Error on create: %d\n", rank, err);
-        }
-    }
-
-
-    for(int i = 0; i <= gpu_count; i++)
-    {
-        pthread_join(threads[i], NULL);
-    }
-
-//  Sync to wait on all processes.
+    //  Sync to wait on all processes.
     MPI_Barrier(MPI_COMM_WORLD);
 
 
-
     gettimeofday(&tv2, &tz);
+    // End benchmark
 
 
     MPI_Request request;

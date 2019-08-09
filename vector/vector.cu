@@ -30,8 +30,9 @@ vectorAdd(const float *A, const float *B, float *C, int size)
 // Allocate cuda memory and pin host memory (required for async stream).
 void alloc_cuda(task_t* task)
 {
-    int size = task->size;
+    cudaSetDevice(task->id - 1);
 
+    int size = task->size;
     task->cudamem.size = size * sizeof(float);
 
     // Allocate the device vectors
@@ -47,6 +48,8 @@ void alloc_cuda(task_t* task)
 // Deallocate cuda memory and unpin host memory.
 void dealloc_cuda(task_t* task)
 {
+    cudaSetDevice(task->id - 1);
+
     // Free device global memory
     cudaCheck(cudaHostUnregister(task->A));
     cudaCheck(cudaHostUnregister(task->B));
@@ -79,6 +82,8 @@ void* run_cuda(void* v_task)
 {
     task_t* task = (task_t*) v_task;
 
+    cudaSetDevice(task->id - 1);
+
     run_cuda_stream(*task, cudaStreamPerThread);
     cudaCheck(cudaStreamSynchronize(cudaStreamPerThread));
 
@@ -98,6 +103,8 @@ cudaStream_t* run_cuda_streams(int gpu_count, task_t tasks[])
     cudaStream_t* streams = (cudaStream_t*) malloc(sizeof(cudaStream_t) * gpu_count);
     for (int i = 0; i < gpu_count; i++)
     {
+        cudaSetDevice(tasks[i + 1].id - 1);
+
         cudaCheck(cudaStreamCreate(&streams[i]));
 
         run_cuda_stream(tasks[i + 1], streams[i]);

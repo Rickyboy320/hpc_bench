@@ -11,6 +11,7 @@ struct cudamem_t {
 };
 
 struct task_t {
+    int id;
     int size;
     float* A;
     float* B;

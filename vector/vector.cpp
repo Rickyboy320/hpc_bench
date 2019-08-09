@@ -11,6 +11,7 @@
 #include "common.h"
 
 #define N 1000000000
+#define RUNS 10
 
 void init_openmp()
 {
@@ -89,7 +90,6 @@ int main(int argc, char** argv)
     int i;
     struct timeval tv1, tv2;
     struct timezone tz;
-	double elapsed;
 
     int rank = init_mpi();
     init_openmp();
@@ -125,11 +125,16 @@ int main(int argc, char** argv)
     int sizePerDevice = ceil(N / (gpu_count + 1.0));
     for(int i = 0; i < gpu_count + 1; i++)
     {
+        tasks[i].id = i;
         tasks[i].A = &A[start + sizePerDevice * i];
         tasks[i].B = &B[start + sizePerDevice * i];
         tasks[i].C = &C[start + sizePerDevice * i];
 
-        tasks[i].size = sizePerDevice;
+        if(i == gpu_count) {
+            tasks[i].size = N - sizePerDevice * gpu_count;
+        } else {
+            tasks[i].size = sizePerDevice;
+        }
     }
 
     // Allocate GPU memory for the CUDA tasks
@@ -141,37 +146,48 @@ int main(int argc, char** argv)
     //  Sync for 'equal' starts.
     MPI_Barrier(MPI_COMM_WORLD);
 
-
     // Start benchmark                 ========================================
-    gettimeofday(&tv1, &tz);
-
-    // Run tasks
-    switch(variant)
+	double elapsed = 0;
+    for(int i = 0; i < RUNS; i++)
     {
-        case pthreads:
-            printf("Selected variant: pthreads\n");
-            run_pthread_variant(rank, gpu_count, tasks);
-            break;
-        case cthreads:
-            printf("Selected variant: c++ threads\n");
-            run_cthread_variant(rank, gpu_count, tasks);
-            break;
-        case openmp:
-            printf("Selected variant: OpenMP threads\n");
-            run_openmp_variant(rank, gpu_count, tasks);
-            break;
-        case cuda:
-            printf("Selected variant: CUDA streams\n");
-            run_cuda_variant(rank, gpu_count, tasks);
-            break;
+        gettimeofday(&tv1, &tz);
+
+        // Run tasks
+        switch(variant)
+        {
+            case pthreads:
+                printf("Selected variant: pthreads\n");
+                run_pthread_variant(rank, gpu_count, tasks);
+                break;
+            case cthreads:
+                printf("Selected variant: c++ threads\n");
+                run_cthread_variant(rank, gpu_count, tasks);
+                break;
+            case openmp:
+                printf("Selected variant: OpenMP threads\n");
+                run_openmp_variant(rank, gpu_count, tasks);
+                break;
+            case cuda:
+                printf("Selected variant: CUDA streams\n");
+                run_cuda_variant(rank, gpu_count, tasks);
+                break;
+        }
+
+        //  Sync to wait on all processes.
+        MPI_Barrier(MPI_COMM_WORLD);
+
+
+        gettimeofday(&tv2, &tz);
+        double currentElapsed = (double) (tv2.tv_sec-tv1.tv_sec) + (double) (tv2.tv_usec-tv1.tv_usec) * 1.e-6;
+        elapsed += currentElapsed;
+        if(rank == 0)
+        {
+            printf("Iter: %d: Elapsed: = %f seconds. Avg = %f\n", i, currentElapsed, elapsed / (i + 1));
+        }
     }
-
-    //  Sync to wait on all processes.
-    MPI_Barrier(MPI_COMM_WORLD);
-
-
-    gettimeofday(&tv2, &tz);
     // End benchmark                   ========================================
+
+
 
     for(int i = 1; i < gpu_count + 1; i++)
     {
@@ -186,10 +202,9 @@ int main(int argc, char** argv)
     MPI_Status status;
     MPI_Wait(&request, &status);
 
-    elapsed = (double) (tv2.tv_sec-tv1.tv_sec) + (double) (tv2.tv_usec-tv1.tv_usec) * 1.e-6;
     if(rank == 0)
     {
-        printf("Elapsed time = %f seconds.\n", elapsed);
+        printf("Elapsed time = %f seconds. Avg = %f\n", elapsed, elapsed / RUNS);
 
         for (int i = 0; i < 2*N; ++i)
         {

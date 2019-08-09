@@ -8,7 +8,7 @@ CC_FLAGS = -O3 -I/cm/shared/apps/cuda10.0/toolkit/10.0.130/include/ -L/cm/shared
 NVCC_FLAGS = --default-stream per-thread
 LL_FLAGS = -fopenmp -lcudart
 
-EXE = vector
+EXE = vector.out
 
 debug: $(SRC)
 	$(CC) $(CC_FLAGS) -c $(SRC)
@@ -17,4 +17,4 @@ debug: $(SRC)
 
 
 clean: $(SRC)
-	rm -f $(EXE) $(EXE).linkinfo result* *.o *.out
+	rm -f $(EXE) $(EXE).linkinfo *.o *.out

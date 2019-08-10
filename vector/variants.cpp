@@ -1,4 +1,5 @@
 #include <thread>
+#include <future>
 #include <pthread.h>
 #include <omp.h>
 
@@ -55,6 +56,24 @@ void run_cthread_variant(int rank, int gpu_count, task_t tasks[])
     for(int i = 0; i <= gpu_count; i++)
     {
         threads[i].join();
+    }
+}
+
+void run_async_variant(int rank, int gpu_count, task_t tasks[])
+{
+    std::future<void*> futures[gpu_count + 1];
+
+    futures[0] = std::async(run_openmp, &tasks[0]);
+
+    for(int i = 1; i <= gpu_count; i++)
+    {
+        futures[i] = std::async(run_cuda, &tasks[i]);
+    }
+
+    // Wait for all tasks to complete.
+    for(int i = 0; i <= gpu_count; i++)
+    {
+        futures[i].wait();
     }
 }
 

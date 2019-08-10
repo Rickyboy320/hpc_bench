@@ -79,6 +79,8 @@ int main(int argc, char** argv)
             variant = cthreads;
         } else if(strcmp(arg, "--cuda") == 0) {
             variant = cuda;
+        } else if(strcmp(arg, "--async") == 0) {
+            variant = async;
         }
     }
 
@@ -170,6 +172,10 @@ int main(int argc, char** argv)
             case cuda:
                 printf("Selected variant: CUDA streams\n");
                 run_cuda_variant(rank, gpu_count, tasks);
+                break;
+            case async:
+                printf("Selected variant: Async\n");
+                run_async_variant(rank, gpu_count, tasks);
                 break;
         }
 

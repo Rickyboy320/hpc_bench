@@ -1,0 +1,8 @@
+#!/bin/sh
+#SBATCH --time=00:15:00
+#SBATCH -N 2
+#SBATCH --ntasks-per-node=1
+
+module load openmpi/gcc/64/1.10.3
+
+mpirun -np 1 -N 1 ./vector.out "$@"

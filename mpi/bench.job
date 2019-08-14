@@ -1,0 +1,13 @@
+#!/bin/sh
+#SBATCH --time=00:15:00
+#SBATCH --ntasks-per-node=16
+
+module load openmpi/gcc/64/1.10.3
+
+if [ "$1" = "--idle" ]; then
+    echo "Running 16."
+    mpirun -np 16 ./vector.out "$@"
+else
+    echo "Running 1."
+    mpirun -np 1 ./vector.out "$@"
+fi

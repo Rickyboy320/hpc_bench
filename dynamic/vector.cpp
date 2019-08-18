@@ -11,7 +11,7 @@
 #include "common.h"
 #include "barrier.h"
 
-#define RUNS 10
+#define RUNS 1
 #define CYCLES 10
 
 void init_openmp()
@@ -51,15 +51,15 @@ void* run_openmp(void* v_task)
         // Run task (sum neighbours) with OpenMP
         int i;
         #pragma omp parallel for private(i) shared(A,C)
-        for (i = offset; i < offset + size; i++)
+        for (i = 0; i < size; i++)
         {
-            int prev = i == 0 ? N - 1 : i - 1;
-            int next = i == N - 1 ? 0 : i + 1;
-
-            C[i] = A[prev] + A[i] + A[next];
+            C[i] = A[i];
+            if(i + offset > 0) { C[i] += A[i-1]; }
+            if(i + offset < N) { C[i] += A[i+1]; }
         }
 
         printf("Waiting barrier OpenMP\n");
+        task->barrier->wait();
         task->barrier->wait();
     }
 
@@ -79,21 +79,20 @@ void run_cthread_variant(int rank, int gpu_count, task_t tasks[], Barrier* barri
     }
 
     for(int i = 0; i < CYCLES; i++) {
+        printf("Waiting barrier main\n");
+        barrier->wait();
+
         if(i == CYCLES - 1) {
             for(int i = 0; i < gpu_count + 1; i++) {
                 tasks[i].done = true;
-                printf("Setting done for %d\n", i);
             }
         }
-
-        printf("Waiting barrier main\n");
-        barrier->wait();
-        barrier->reset();
 
         printf("Waiting MPI\n");
 
         //  Sync to wait on all processes.
         MPI_Barrier(MPI_COMM_WORLD);
+        barrier->wait();
     }
 
     // Wait for all tasks to complete.
@@ -116,6 +115,8 @@ int main(int argc, char** argv)
     int world_size;
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
 
+    printf("World size: %d\n", world_size);
+
     const int length = ceil(N / world_size);
     int start = rank * length;
 
@@ -136,9 +137,9 @@ int main(int argc, char** argv)
     int sizePerDevice = ceil(length / (gpu_count + 1.0));
     for(int i = 0; i < gpu_count + 1; i++)
     {
-        tasks[i].cuda.id = i;
-        tasks[i].A = &A[start + sizePerDevice * i];
-        tasks[i].C = &C[start + sizePerDevice * i];
+        tasks[i].offset = start + sizePerDevice * i;
+        tasks[i].A = &A[tasks[i].offset];
+        tasks[i].C = &C[tasks[i].offset];
 
         if(i == gpu_count) {
             tasks[i].size = N - sizePerDevice * gpu_count;
@@ -153,6 +154,8 @@ int main(int argc, char** argv)
     // Allocate GPU memory for the CUDA tasks
     for(int i = 1; i < gpu_count + 1; i++)
     {
+        tasks[i].cuda.id = i - 1;
+
         alloc_cuda(&tasks[i]);
     }
 
@@ -166,7 +169,6 @@ int main(int argc, char** argv)
             tasks[i].done = false;
         }
 
-        printf("Running: %d\n", i);
         // Run tasks
         run_cthread_variant(rank, gpu_count, tasks, &barrier);
     }
@@ -190,12 +192,10 @@ int main(int argc, char** argv)
 
         for (int i = 0; i < N; i++)
         {
-            int prev = i == 0 ? N - 1 : i - 1;
-            int next = i == N - 1 ? 0 : i + 1;
-
-            if(fabs(A[prev] + A[i] + A[next] - C[i]) > 1e-5)
+            int sum = A[i] + (i == 0 ? 0 : A[i - 1]) + (i == N - 1 ? 0 : A[i + 1]);
+            if(fabs(sum - C[i]) > 1e-5)
             {
-                fprintf(stderr, "Result verification failed at element %d!\n", i);
+                fprintf(stderr, "Result verification failed at element %d! Was: %f, should be: %f\n", i, C[i], sum);
                 exit(EXIT_FAILURE);
             }
         }

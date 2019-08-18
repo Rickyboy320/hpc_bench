@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include "barrier.h"
 
-#define N 10000000
+#define N 10
 
 struct cudamem_t {
     int id;

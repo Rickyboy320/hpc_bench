@@ -1,8 +1,9 @@
 #pragma once
 
 #include <stdio.h>
+#include "barrier.h"
 
-#define N 1000000000
+#define N 10000000
 
 struct cudamem_t {
     int id;
@@ -16,7 +17,9 @@ struct task_t {
     int offset;
     float* A;
     float* C;
+    bool done;
     cudamem_t cuda;
+    Barrier* barrier;
 };
 
 int init_cuda();

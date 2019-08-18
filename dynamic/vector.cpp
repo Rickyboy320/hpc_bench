@@ -8,10 +8,11 @@
 #include <sys/time.h>
 #include <cuda_runtime_api.h>
 
-#include "variants.h"
 #include "common.h"
+#include "barrier.h"
 
 #define RUNS 10
+#define CYCLES 10
 
 void init_openmp()
 {
@@ -46,21 +47,27 @@ void* run_openmp(void* v_task)
     int size = task->size;
     int offset = task->offset;
 
-    // Run task (vector addition) with OpenMP
-    int i;
-    #pragma omp parallel for private(i) shared(A,C)
-    for (i = offset; i < offset + size; i++)
-    {
-        int prev = i == 0 ? N - 1 : i - 1;
-        int next = i == N - 1 ? 0 : i + 1;
+    while(!task->done) {
+        // Run task (sum neighbours) with OpenMP
+        int i;
+        #pragma omp parallel for private(i) shared(A,C)
+        for (i = offset; i < offset + size; i++)
+        {
+            int prev = i == 0 ? N - 1 : i - 1;
+            int next = i == N - 1 ? 0 : i + 1;
 
-        C[i] = A[prev] + A[i] + A[next];
+            C[i] = A[prev] + A[i] + A[next];
+        }
+
+        printf("Waiting barrier OpenMP\n");
+        task->barrier->wait();
     }
 
+    printf("omp.done()!\n");
     pthread_exit(NULL);
 }
 
-void run_cthread_variant(int rank, int gpu_count, task_t tasks[])
+void run_cthread_variant(int rank, int gpu_count, task_t tasks[], Barrier* barrier)
 {
     std::thread threads[gpu_count + 1];
 
@@ -71,9 +78,28 @@ void run_cthread_variant(int rank, int gpu_count, task_t tasks[])
         threads[i] = std::thread(run_cuda, &tasks[i]);
     }
 
+    for(int i = 0; i < CYCLES; i++) {
+        if(i == CYCLES - 1) {
+            for(int i = 0; i < gpu_count + 1; i++) {
+                tasks[i].done = true;
+                printf("Setting done for %d\n", i);
+            }
+        }
+
+        printf("Waiting barrier main\n");
+        barrier->wait();
+        barrier->reset();
+
+        printf("Waiting MPI\n");
+
+        //  Sync to wait on all processes.
+        MPI_Barrier(MPI_COMM_WORLD);
+    }
+
     // Wait for all tasks to complete.
     for(int i = 0; i <= gpu_count; i++)
     {
+        printf("Joining %d\n", i);
         threads[i].join();
     }
 }
@@ -103,9 +129,11 @@ int main(int argc, char** argv)
 
     printf("Rank: %d: Count GPU devices: %d\n", rank, gpu_count);
 
+    Barrier barrier(gpu_count + 2);
+
     task_t tasks[gpu_count + 1];
 
-    int sizePerDevice = ceil(N / (gpu_count + 1.0));
+    int sizePerDevice = ceil(length / (gpu_count + 1.0));
     for(int i = 0; i < gpu_count + 1; i++)
     {
         tasks[i].cuda.id = i;
@@ -117,6 +145,9 @@ int main(int argc, char** argv)
         } else {
             tasks[i].size = sizePerDevice;
         }
+
+        tasks[i].barrier = &barrier;
+        tasks[i].done = false;
     }
 
     // Allocate GPU memory for the CUDA tasks
@@ -131,11 +162,13 @@ int main(int argc, char** argv)
     // Start benchmark                 ========================================
     for(int i = 0; i < RUNS; i++)
     {
-        // Run tasks
-        run_cthread_variant(rank, gpu_count, tasks);
+        for(int i = 0; i <= gpu_count; i++) {
+            tasks[i].done = false;
+        }
 
-        //  Sync to wait on all processes.
-        MPI_Barrier(MPI_COMM_WORLD);
+        printf("Running: %d\n", i);
+        // Run tasks
+        run_cthread_variant(rank, gpu_count, tasks, &barrier);
     }
     // End benchmark                   ========================================
 
@@ -147,13 +180,12 @@ int main(int argc, char** argv)
     // Communicate result over MPI & verify.
      if(rank == 0)
     {
+        // MPI_Request request;
+        // MPI_Irecv(&C[receive], N, MPI_FLOAT, (rank + 1) % 2, 0, MPI_COMM_WORLD, &request);
+        // MPI_Send(&C[start], N, MPI_FLOAT, (rank + 1) % 2, 0, MPI_COMM_WORLD);
 
-        MPI_Request request;
-        MPI_Irecv(&C[receive], N, MPI_FLOAT, (rank + 1) % 2, 0, MPI_COMM_WORLD, &request);
-        MPI_Send(&C[start], N, MPI_FLOAT, (rank + 1) % 2, 0, MPI_COMM_WORLD);
-
-        MPI_Status status;
-        MPI_Wait(&request, &status);
+        // MPI_Status status;
+        // MPI_Wait(&request, &status);
 
 
         for (int i = 0; i < N; i++)
@@ -163,7 +195,7 @@ int main(int argc, char** argv)
 
             if(fabs(A[prev] + A[i] + A[next] - C[i]) > 1e-5)
             {
-                 fprintf(stderr, "Result verification failed at element %d!\n", i);
+                fprintf(stderr, "Result verification failed at element %d!\n", i);
                 exit(EXIT_FAILURE);
             }
         }

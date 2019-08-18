@@ -2,25 +2,9 @@
 
 #include <stdio.h>
 #include "barrier.h"
+#include "task.h"
 
 #define N 10
-
-struct cudamem_t {
-    int id;
-    int size;
-    float* A;
-    float* C;
-};
-
-struct task_t {
-    int size;
-    int offset;
-    float* A;
-    float* C;
-    bool done;
-    cudamem_t cuda;
-    Barrier* barrier;
-};
 
 int init_cuda();
 void alloc_cuda(task_t* task);

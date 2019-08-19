@@ -60,6 +60,8 @@ void* run_cuda(void* v_task)
     while(!task->done) {
         // Copy the host input vectors A and B H2D.
 
+        printf("A: %p, cudaA: %p, size: %d\n", task->cuda.A, &task->A[-1], task->cuda.size + 2*sizeof(float));
+
         int inset = 0;
         cudaCheck(cudaMemcpy(task->cuda.A, &task->A[-1], task->cuda.size + 2 * sizeof(float), cudaMemcpyHostToDevice));
         inset = 1;
@@ -75,10 +77,12 @@ void* run_cuda(void* v_task)
 
         cudaCheck(cudaDeviceSynchronize());
 
+        printf("cuda wait\n");
         task->barrier->wait();
         task->barrier->wait();
     }
 
+    printf("cuda done\n");
     pthread_exit(NULL);
 }
 

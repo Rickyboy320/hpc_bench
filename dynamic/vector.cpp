@@ -43,6 +43,11 @@ void* run_openmp(void* v_task)
     float* C = task->C;
     int size = task->size;
 
+    printf("ompt task: %p\n", task);
+
+    printf("omp A: %p\n", A);
+    printf("omp done: %s\n", task->done ? "true" : "false");
+
     while(!task->done) {
         // Run task (sum neighbours) with OpenMP
         int i;
@@ -50,49 +55,52 @@ void* run_openmp(void* v_task)
         for (i = 0; i < size; i++)
         {
             C[i] = A[i] + A[i-1] + A[i+1];
+            printf("A: %f A-1 %f A+1 %f C: %f\n", A[i], A[i-1], A[i+1], C[i]);
         }
 
+        printf("omp barrier\n");
         task->barrier->wait();
         task->barrier->wait();
     }
 
+    printf("omp done\n");
     pthread_exit(NULL);
 }
 
-void run_cthread_variant(int rank, int task_count, task_t tasks[], Barrier* barrier)
+void run_cthread_variant(int rank, int task_count, std::vector<task_t> &tasks, Barrier* barrier)
 {
-    std::thread threads[task_count];
-
-    for(int i = 0; i < task_count; i++) {
-        if(tasks[i].type == CPU) {
-            threads[i] = std::thread(run_openmp, &tasks[i]);
-        } else {
-            threads[i] = std::thread(run_cuda, &tasks[i]);
-        }
-    }
+    std::vector<std::thread> threads;
 
     // Pre communication:
-    for(int i = 0; i < task_count; i++) {
-        if(tasks[i].prev_rank != rank && tasks[i].prev_rank != -1) {
-            MPI_Request request;
-            MPI_Status status;
-            MPI_Isend(&tasks[i].A[0], 1, MPI_FLOAT, tasks[i].prev_rank, 0, MPI_COMM_WORLD, &request);
-            MPI_Recv(&tasks[i].A[-1], 1, MPI_FLOAT, tasks[i].prev_rank, 0, MPI_COMM_WORLD, &status);
-        }
-        if(tasks[i].next_rank != rank && tasks[i].next_rank != -1) {
-            MPI_Request request;
-            MPI_Status status;
-            MPI_Isend(&tasks[i].A[tasks[i].size - 1], 1, MPI_FLOAT, tasks[i].next_rank, 0, MPI_COMM_WORLD, &request);
-            MPI_Recv(&tasks[i].A[tasks[i].size], 1, MPI_FLOAT, tasks[i].next_rank, 0, MPI_COMM_WORLD, &status);
+    std::vector<MPI_Request> requests;
+    for(int i = 0; i < tasks.size(); i++) {
+        fetch_and_update_neighbours(rank, &tasks[i], requests);
+    }
+
+    printf("(%d) Pre Waiting all\n", rank);
+    if(!requests.empty()) {
+        MPI_Status* statuses;
+        MPI_Waitall(requests.size(), &requests[0], statuses);
+    }
+
+    printf("(%d) Starting threads: %d\n", rank, tasks.size());
+    for(int i = 0; i < tasks.size(); i++) {
+        if(tasks[i].type == CPU) {
+            threads.push_back(std::thread(run_openmp, &tasks[i]));
+        } else if(tasks[i].type == GPU) {
+            threads.push_back(std::thread(run_cuda, &tasks[i]));
+        } else {
+            printf("WARNING: task without type: %p\n", &tasks[i]);
+            throw std::exception();
         }
     }
 
     for(int c = 0; c < CYCLES; c++) {
-        printf("Waiting barrier main\n");
+        printf("(%d) Waiting barrier main\n", rank);
         barrier->wait();
 
         if(c == CYCLES - 1) {
-            for(int i = 0; i < task_count; i++) {
+            for(int i = 0; i < tasks.size(); i++) {
                 tasks[i].done = true;
             }
         }
@@ -106,37 +114,25 @@ void run_cthread_variant(int rank, int task_count, task_t tasks[], Barrier* barr
             }
         }
 
-        // Exchange MPI info (semi-dirty atm, no dynamic waiting for simplicity).
-        for(int i = 0; i < task_count; i++) {
-            if(tasks[i].prev_rank != rank && tasks[i].prev_rank != -1) {
-                MPI_Request request;
-                MPI_Status status;
-                MPI_Isend(&tasks[i].C[0], 1, MPI_FLOAT, tasks[i].prev_rank, 0, MPI_COMM_WORLD, &request);
-                MPI_Recv(&tasks[i].A[-1], 1, MPI_FLOAT, tasks[i].prev_rank, 0, MPI_COMM_WORLD, &status);
-            }
-            if(tasks[i].next_rank != rank && tasks[i].next_rank != -1) {
-                MPI_Request request;
-                MPI_Status status;
-                MPI_Isend(&tasks[i].C[tasks[i].size - 1], 1, MPI_FLOAT, tasks[i].next_rank, 0, MPI_COMM_WORLD, &request);
-                MPI_Recv(&tasks[i].A[tasks[i].size], 1, MPI_FLOAT, tasks[i].next_rank, 0, MPI_COMM_WORLD, &status);
-            }
+        printf("(%d) Updating neighbours\n", rank);
+        std::vector<MPI_Request> requests;
+        for(int i = 0; i < tasks.size(); i++) {
+            fetch_and_update_neighbours(rank, &tasks[i], requests);
+
+            // TODO: now this deadlocks because 3rd patch does not know that the patch changed.
         }
+
+        MPI_Status* statuses;
+        MPI_Waitall(requests.size(), &requests[0], statuses);
 
         // Split
         if(c == 3 && rank == 0) {
             // Arbitrarily (as a test) decide to split.
-            task_t task = split(&tasks[0], rank);
-
+            split(&tasks[0], rank, tasks);
         }
 
         if(c == 3 && rank == 1) {
-            task_t task = receive_split(rank, 0);
-            printf("(%d) Received task of size: %d\n", rank, task.size);
-            printf("R-Task: size: %d\n", task.size);
-            printf("R-Task: next: %d\n", task.next_rank);
-            printf("R-Task: prev: %d\n", task.prev_rank);
-            printf("R-Task: A: %p\n", task.A);
-            printf("R-Task: C: %p\n", task.C);
+            receive_split(rank, 0, tasks);
         }
 
         printf("(%d) Waiting MPI\n", rank);
@@ -172,7 +168,7 @@ int main(int argc, char** argv)
 
     Barrier barrier(task_count + 1);
 
-    task_t tasks[task_count];
+    std::vector<task_t> tasks;
     if(task_count > 0) {
         init_tasks(tasks, task_count, &barrier, active_devices);
     }
@@ -192,7 +188,7 @@ int main(int argc, char** argv)
     }
 
     // Communicate result over MPI & verify.
-    for(int i = 0; i < task_count; i++) {
+    for(int i = 0; i < tasks.size(); i++) {
         for(int j = 0; j < tasks[i].size; j++) {
             printf("(%d) [%d] %d: %f\n", rank, i, j, tasks[i].C[j]);
         }

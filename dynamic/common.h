@@ -4,7 +4,7 @@
 #include "barrier.h"
 #include "task.h"
 
-#define N 20
+#define N 10
 
 int init_cuda();
 void alloc_cuda(task_t* task);

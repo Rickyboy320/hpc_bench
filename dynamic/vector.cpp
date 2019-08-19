@@ -50,15 +50,12 @@ void* run_openmp(void* v_task)
         for (i = 0; i < size; i++)
         {
             C[i] = A[i] + A[i-1] + A[i+1];
-            printf("C[%d]: %f, A[%d]: %f, A[%d-1]: %f, A[%d+1]: %f\n", i, C[i], i, A[i], i, A[i-1], i, A[i+1]);
         }
 
-        printf("Waiting barrier OpenMP\n");
         task->barrier->wait();
         task->barrier->wait();
     }
 
-    printf("omp.done()!\n");
     pthread_exit(NULL);
 }
 
@@ -74,36 +71,21 @@ void run_cthread_variant(int rank, int task_count, task_t tasks[], Barrier* barr
         }
     }
 
-    for(int i = 0; i < task_count; i++) {
-        for(int j = -1; j < tasks[i].size + 1; j++) {
-            printf("PREPRE: (%d) [%d] %d: %f\n", rank, i, j, tasks[i].A[j]);
-        }
-    }
-
     // Pre communication:
     for(int i = 0; i < task_count; i++) {
         if(tasks[i].prev_rank != rank && tasks[i].prev_rank != -1) {
             MPI_Request request;
             MPI_Status status;
-            printf("(%d) Sending prev to %d\n", rank, tasks[i].prev_rank);
             MPI_Isend(&tasks[i].A[0], 1, MPI_FLOAT, tasks[i].prev_rank, 0, MPI_COMM_WORLD, &request);
             MPI_Recv(&tasks[i].A[-1], 1, MPI_FLOAT, tasks[i].prev_rank, 0, MPI_COMM_WORLD, &status);
         }
         if(tasks[i].next_rank != rank && tasks[i].next_rank != -1) {
             MPI_Request request;
             MPI_Status status;
-            printf("(%d) Sending next to %d\n", rank, tasks[i].next_rank);
             MPI_Isend(&tasks[i].A[tasks[i].size - 1], 1, MPI_FLOAT, tasks[i].next_rank, 0, MPI_COMM_WORLD, &request);
             MPI_Recv(&tasks[i].A[tasks[i].size], 1, MPI_FLOAT, tasks[i].next_rank, 0, MPI_COMM_WORLD, &status);
         }
     }
-
-    for(int i = 0; i < task_count; i++) {
-        for(int j = -1; j < tasks[i].size + 1; j++) {
-            printf("Pre: (%d) [%d] %d: %f\n", rank, i, j, tasks[i].A[j]);
-        }
-    }
-
 
     for(int c = 0; c < CYCLES; c++) {
         printf("Waiting barrier main\n");
@@ -124,22 +106,37 @@ void run_cthread_variant(int rank, int task_count, task_t tasks[], Barrier* barr
             }
         }
 
-        // Exchange MPI info.
+        // Exchange MPI info (semi-dirty atm, no dynamic waiting for simplicity).
         for(int i = 0; i < task_count; i++) {
             if(tasks[i].prev_rank != rank && tasks[i].prev_rank != -1) {
                 MPI_Request request;
                 MPI_Status status;
-                printf("(%d) Sending prev to %d\n", rank, tasks[i].prev_rank);
                 MPI_Isend(&tasks[i].C[0], 1, MPI_FLOAT, tasks[i].prev_rank, 0, MPI_COMM_WORLD, &request);
                 MPI_Recv(&tasks[i].A[-1], 1, MPI_FLOAT, tasks[i].prev_rank, 0, MPI_COMM_WORLD, &status);
             }
             if(tasks[i].next_rank != rank && tasks[i].next_rank != -1) {
                 MPI_Request request;
                 MPI_Status status;
-                printf("(%d) Sending next to %d\n", rank, tasks[i].next_rank);
                 MPI_Isend(&tasks[i].C[tasks[i].size - 1], 1, MPI_FLOAT, tasks[i].next_rank, 0, MPI_COMM_WORLD, &request);
                 MPI_Recv(&tasks[i].A[tasks[i].size], 1, MPI_FLOAT, tasks[i].next_rank, 0, MPI_COMM_WORLD, &status);
             }
+        }
+
+        // Split
+        if(c == 3 && rank == 0) {
+            // Arbitrarily (as a test) decide to split.
+            task_t task = split(&tasks[0], rank);
+
+        }
+
+        if(c == 3 && rank == 1) {
+            task_t task = receive_split(rank, 0);
+            printf("(%d) Received task of size: %d\n", rank, task.size);
+            printf("R-Task: size: %d\n", task.size);
+            printf("R-Task: next: %d\n", task.next_rank);
+            printf("R-Task: prev: %d\n", task.prev_rank);
+            printf("R-Task: A: %p\n", task.A);
+            printf("R-Task: C: %p\n", task.C);
         }
 
         printf("(%d) Waiting MPI\n", rank);
@@ -152,7 +149,7 @@ void run_cthread_variant(int rank, int task_count, task_t tasks[], Barrier* barr
     // Wait for all tasks to complete.
     for(int i = 0; i < task_count; i++)
     {
-        printf("Joining %d\n", i);
+        printf("(%d) Joining %d\n", rank, i);
         threads[i].join();
     }
 }

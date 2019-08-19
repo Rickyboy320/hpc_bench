@@ -4,7 +4,7 @@
 #include "task.h"
 #include "common.h"
 
-task_t split(task_t* task)
+task_t split(task_t* task, int rank)
 {
     task_t new_task;
     int size = task->size;
@@ -12,13 +12,56 @@ task_t split(task_t* task)
 
     task->size = new_size;
 
+    // 'Left split' (original task receives the left side). Might be more favorable to do a right split in some situations.
     new_task.size = size - new_size;
     new_task.A = &task->A[new_size];
     new_task.C = &task->C[new_size];
     new_task.barrier = task->barrier;
+    new_task.prev_rank = rank;
+    new_task.next_rank = task->next_rank;
+
+    // Find devices.
+    // if(freeDeviceOnNode()) {
+        //task->next_rank = rank;
+        // type = GPU / CPU
+        // if(type == GPU) { allocCuda(task); }
+        //
+    // } else {
+        // int target = findSomeFreeNode();
+        int target = 1;
+        task->next_rank = target;
+
+        printf("(%d) Initiating task send to %d\n", rank, target);
+
+        MPI_Status status;
+        MPI_Send(&new_task.size, 1, MPI_INT, target, 0, MPI_COMM_WORLD);
+        MPI_Send(new_task.A, new_task.size + 2, MPI_FLOAT, target, 0, MPI_COMM_WORLD);
+        MPI_Send(new_task.C, new_task.size, MPI_FLOAT, target, 0, MPI_COMM_WORLD);
+        MPI_Send(&new_task.next_rank, 1, MPI_INT, target, 0, MPI_COMM_WORLD);
+        MPI_Send(&new_task.prev_rank, 1, MPI_INT, target, 0, MPI_COMM_WORLD);
+    //}
 
     return new_task;
 }
+
+task_t receive_split(int rank, int source)
+{
+    printf("(%d) Initiating task receive from %d\n", rank, source);
+
+    task_t new_task;
+    MPI_Status status;
+    MPI_Recv(&new_task.size, 1, MPI_INT, source, 0, MPI_COMM_WORLD, &status);
+    new_task.A = (float*) malloc((new_task.size + 2) * sizeof(float));
+    new_task.C = (float*) malloc((new_task.size) * sizeof(float));
+
+    MPI_Recv(new_task.A, new_task.size + 2, MPI_FLOAT, source, 0, MPI_COMM_WORLD, &status);
+    MPI_Recv(new_task.C, new_task.size, MPI_FLOAT, source, 0, MPI_COMM_WORLD, &status);
+    MPI_Recv(&new_task.next_rank, 1, MPI_INT, source, 0, MPI_COMM_WORLD, &status);
+    MPI_Recv(&new_task.prev_rank, 1, MPI_INT, source, 0, MPI_COMM_WORLD, &status);
+
+    return new_task;
+}
+
 
 void init_tasks(task_t* tasks, int task_count, Barrier* barrier, int active_devices)
 {
@@ -27,8 +70,6 @@ void init_tasks(task_t* tasks, int task_count, Barrier* barrier, int active_devi
 
     const int length = ceil(N / active_devices);
     int start = rank * length;
-
-    printf("(%d) Initing with length: %d. Start: %d\n", rank, length, start);
 
     float* A = (float*) malloc(sizeof(float) * length + 2);
     float* C = (float*) malloc(sizeof(float) * length);
@@ -50,8 +91,6 @@ void init_tasks(task_t* tasks, int task_count, Barrier* barrier, int active_devi
         } else {
             tasks[i].size = sizePerDevice;
         }
-
-        printf("(%d) Setting task[%d] to size: %d\n", rank, i, tasks[i].size);
 
         tasks[i].barrier = barrier;
         tasks[i].done = false;

@@ -26,8 +26,12 @@ struct task_t {
     Barrier* barrier;
 
     int next_rank;
+    float* next_A;
     int prev_rank;
+    float* prev_A;
 };
 
-task_t split(task_t* task);
+task_t split(task_t* task, int rank);
+task_t receive_split(int rank, int source);
+
 void init_tasks(task_t* tasks, int task_count, Barrier* barrier, int active_devices);

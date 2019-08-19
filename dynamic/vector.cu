@@ -17,15 +17,14 @@ inline void cudaAssert(cudaError_t code, const char *file, int line, bool abort=
 
 
 __global__ void
-vectorAdd(const float *A, float *C, int size, int offset, int inset)
+vectorAdd(const float *A, float *C, int size, int inset)
 {
     int i = blockDim.x * blockIdx.x + threadIdx.x;
 
     if(i < size)
     {
-        C[i] = A[i + inset];
-        if(i + offset > 0) { C[i] += A[i - 1 + inset]; }
-        if(i + offset < N) { C[i] += A[i + 1 + inset]; }
+        C[i] = A[i + inset] + A[i - 1 + inset] + A[i + 1 + inset];
+        printf("C[%d]: %f, A[%d]: %f, A[%d-1]: %f, A[%d+1]: %f\n", i, C[i], i, A[i + inset], i, A[i-1 + inset], i, A[i+1 + inset]);
     }
 }
 
@@ -64,22 +63,15 @@ void* run_cuda(void* v_task)
         // Copy the host input vectors A and B H2D.
 
         int inset = 0;
-        if(task->offset == 0) {
-            cudaCheck(cudaMemcpy(task->cuda.A, task->A, task->cuda.size + sizeof(float), cudaMemcpyHostToDevice));
-        } else if(task->offset + task->size >= N) {
-            cudaCheck(cudaMemcpy(task->cuda.A, &task->A[-1], task->cuda.size + sizeof(float), cudaMemcpyHostToDevice));
-            inset = 1;
-        } else {
-            cudaCheck(cudaMemcpy(task->cuda.A, &task->A[-1], task->cuda.size + 2 * sizeof(float), cudaMemcpyHostToDevice));
-            inset = 1;
-        }
+        cudaCheck(cudaMemcpy(task->cuda.A, &task->A[-1], task->cuda.size + 2 * sizeof(float), cudaMemcpyHostToDevice));
+        inset = 1;
 
         // Launch the vector-add CUDA Kernel
         int threadsPerBlock = 256;
         int blocksPerGrid = (task->size + threadsPerBlock - 1) / threadsPerBlock;
 
         printf("Cuda kernel: %d\n", task->cuda.id);
-        vectorAdd<<<blocksPerGrid, threadsPerBlock, 0>>>(task->cuda.A, task->cuda.C, task->size, task->offset, inset);
+        vectorAdd<<<blocksPerGrid, threadsPerBlock, 0>>>(task->cuda.A, task->cuda.C, task->size, inset);
 
         // Copy the device result vector D2H.
         printf("Cuda memcpy d2h: %d\n", task->cuda.id);

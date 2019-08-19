@@ -15,13 +15,18 @@ struct cudamem_t {
 
 struct task_t {
     devicetype type;
+
     int size;
-    int offset;
+
     float* A;
     float* C;
     bool done;
+
     cudamem_t cuda;
     Barrier* barrier;
+
+    int next_rank;
+    int prev_rank;
 };
 
 task_t split(task_t* task);

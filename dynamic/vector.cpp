@@ -42,7 +42,6 @@ void* run_openmp(void* v_task)
     float* A = task->A;
     float* C = task->C;
     int size = task->size;
-    int offset = task->offset;
 
     while(!task->done) {
         // Run task (sum neighbours) with OpenMP
@@ -50,9 +49,8 @@ void* run_openmp(void* v_task)
         #pragma omp parallel for private(i) shared(A,C)
         for (i = 0; i < size; i++)
         {
-            C[i] = A[i];
-            if(i + offset > 0) { C[i] += A[i-1]; }
-            if(i + offset < N) { C[i] += A[i+1]; }
+            C[i] = A[i] + A[i-1] + A[i+1];
+            printf("C[%d]: %f, A[%d]: %f, A[%d-1]: %f, A[%d+1]: %f\n", i, C[i], i, A[i], i, A[i-1], i, A[i+1]);
         }
 
         printf("Waiting barrier OpenMP\n");
@@ -76,20 +74,75 @@ void run_cthread_variant(int rank, int task_count, task_t tasks[], Barrier* barr
         }
     }
 
-    for(int i = 0; i < CYCLES; i++) {
+    for(int i = 0; i < task_count; i++) {
+        for(int j = -1; j < tasks[i].size + 1; j++) {
+            printf("PREPRE: (%d) [%d] %d: %f\n", rank, i, j, tasks[i].A[j]);
+        }
+    }
+
+    // Pre communication:
+    for(int i = 0; i < task_count; i++) {
+        if(tasks[i].prev_rank != rank && tasks[i].prev_rank != -1) {
+            MPI_Request request;
+            MPI_Status status;
+            printf("(%d) Sending prev to %d\n", rank, tasks[i].prev_rank);
+            MPI_Isend(&tasks[i].A[0], 1, MPI_FLOAT, tasks[i].prev_rank, 0, MPI_COMM_WORLD, &request);
+            MPI_Recv(&tasks[i].A[-1], 1, MPI_FLOAT, tasks[i].prev_rank, 0, MPI_COMM_WORLD, &status);
+        }
+        if(tasks[i].next_rank != rank && tasks[i].next_rank != -1) {
+            MPI_Request request;
+            MPI_Status status;
+            printf("(%d) Sending next to %d\n", rank, tasks[i].next_rank);
+            MPI_Isend(&tasks[i].A[tasks[i].size - 1], 1, MPI_FLOAT, tasks[i].next_rank, 0, MPI_COMM_WORLD, &request);
+            MPI_Recv(&tasks[i].A[tasks[i].size], 1, MPI_FLOAT, tasks[i].next_rank, 0, MPI_COMM_WORLD, &status);
+        }
+    }
+
+    for(int i = 0; i < task_count; i++) {
+        for(int j = -1; j < tasks[i].size + 1; j++) {
+            printf("Pre: (%d) [%d] %d: %f\n", rank, i, j, tasks[i].A[j]);
+        }
+    }
+
+
+    for(int c = 0; c < CYCLES; c++) {
         printf("Waiting barrier main\n");
         barrier->wait();
 
-        if(i == CYCLES - 1) {
+        if(c == CYCLES - 1) {
             for(int i = 0; i < task_count; i++) {
                 tasks[i].done = true;
             }
         }
 
+        // Switch buffers (slow quick & dirty variant)
+        for(int i = 0; i < task_count; i++) {
+            for(int j = 0; j < tasks[i].size; j++) {
+                printf("C%d: (%d) [%d] %d: %f\n", c, rank, i, j, tasks[i].C[j]);
+
+                tasks[i].A[j] = tasks[i].C[j];
+            }
+        }
+
         // Exchange MPI info.
+        for(int i = 0; i < task_count; i++) {
+            if(tasks[i].prev_rank != rank && tasks[i].prev_rank != -1) {
+                MPI_Request request;
+                MPI_Status status;
+                printf("(%d) Sending prev to %d\n", rank, tasks[i].prev_rank);
+                MPI_Isend(&tasks[i].C[0], 1, MPI_FLOAT, tasks[i].prev_rank, 0, MPI_COMM_WORLD, &request);
+                MPI_Recv(&tasks[i].A[-1], 1, MPI_FLOAT, tasks[i].prev_rank, 0, MPI_COMM_WORLD, &status);
+            }
+            if(tasks[i].next_rank != rank && tasks[i].next_rank != -1) {
+                MPI_Request request;
+                MPI_Status status;
+                printf("(%d) Sending next to %d\n", rank, tasks[i].next_rank);
+                MPI_Isend(&tasks[i].C[tasks[i].size - 1], 1, MPI_FLOAT, tasks[i].next_rank, 0, MPI_COMM_WORLD, &request);
+                MPI_Recv(&tasks[i].A[tasks[i].size], 1, MPI_FLOAT, tasks[i].next_rank, 0, MPI_COMM_WORLD, &status);
+            }
+        }
 
-
-        printf("Waiting MPI\n");
+        printf("(%d) Waiting MPI\n", rank);
 
         //  Sync to wait on all processes.
         MPI_Barrier(MPI_COMM_WORLD);
@@ -109,7 +162,7 @@ int main(int argc, char** argv)
     // Parse command line args
     int active_devices = 1;
     if(argc > 1) {
-        active_devices = std::stoi(argv[0]);
+        active_devices = std::stoi(argv[1]);
     }
 
     int rank = init();
@@ -123,7 +176,9 @@ int main(int argc, char** argv)
     Barrier barrier(task_count + 1);
 
     task_t tasks[task_count];
-    init_tasks(tasks, task_count, &barrier, active_devices);
+    if(task_count > 0) {
+        init_tasks(tasks, task_count, &barrier, active_devices);
+    }
 
     //  Sync for 'equal' starts.
     MPI_Barrier(MPI_COMM_WORLD);
@@ -132,22 +187,22 @@ int main(int argc, char** argv)
     run_cthread_variant(rank, task_count, tasks, &barrier);
 
 
-    for(int i = 1; i < gpu_count + 1; i++)
+    for(int i = 0; i < task_count; i++)
     {
-        dealloc_cuda(&tasks[i]);
+        if(tasks[i].type == GPU) {
+            dealloc_cuda(&tasks[i]);
+        }
     }
 
     // Communicate result over MPI & verify.
+    for(int i = 0; i < task_count; i++) {
+        for(int j = 0; j < tasks[i].size; j++) {
+            printf("(%d) [%d] %d: %f\n", rank, i, j, tasks[i].C[j]);
+        }
+    }
+
     if(rank == 0)
     {
-        // MPI_Request request;
-        // MPI_Irecv(&C[receive], N, MPI_FLOAT, (rank + 1) % 2, 0, MPI_COMM_WORLD, &request);
-        // MPI_Send(&C[start], N, MPI_FLOAT, (rank + 1) % 2, 0, MPI_COMM_WORLD);
-
-        // MPI_Status status;
-        // MPI_Wait(&request, &status);
-
-
         // TODO: readd check
 
         // for (int i = 0; i < N; i++)

@@ -128,7 +128,7 @@ void init_tasks(std::vector<task_t> &tasks, int task_count, Barrier* barrier, in
         }
 
         tasks[i].barrier = barrier;
-        tasks[i].done = false;
+        tasks[i].start_iteration = 0;
         printf("task: %p\n", &tasks[i]);
     }
 

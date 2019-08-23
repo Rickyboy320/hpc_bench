@@ -31,7 +31,7 @@ struct task_t {
 
     float* A;
     float* C;
-    bool done;
+    int start_iteration;
 
     cudamem_t cuda;
     Barrier* barrier;

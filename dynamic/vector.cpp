@@ -12,8 +12,6 @@
 #include "common.h"
 #include "barrier.h"
 
-#define CYCLES 10
-
 int init()
 {
     omp_set_num_threads(omp_get_num_procs());
@@ -42,13 +40,16 @@ void* run_openmp(void* v_task)
     float* A = task->A;
     float* C = task->C;
     int size = task->size;
+    int iteration = task->start_iteration;
+    int rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
     printf("ompt task: %p\n", task);
 
     printf("omp A: %p\n", A);
-    printf("omp done: %s\n", task->done ? "true" : "false");
+    printf("omp iteration: %d\n", iteration);
 
-    while(!task->done) {
+    for(; iteration < CYCLES; iteration++) {
         // Run task (sum neighbours) with OpenMP
         int i;
         #pragma omp parallel for private(i) shared(A,C)
@@ -60,6 +61,24 @@ void* run_openmp(void* v_task)
 
         printf("omp barrier\n");
         task->barrier->wait();
+
+        //Switch buffers
+        for(int j = 0; j < size; j++) {
+            printf("C%d: (%d) %d: %f\n", iteration, rank, j, C[j]);
+
+            A[j] = C[j];
+        }
+
+        printf("(%d) Updating neighbours\n", rank);
+        std::vector<MPI_Request> requests;
+        fetch_and_update_neighbours(rank, task, requests);
+        // TODO: now this deadlocks because 3rd patch does not know that the patch changed.
+
+        MPI_Status* statuses;
+        MPI_Waitall(requests.size(), &requests[0], statuses);
+
+        task->barrier->wait();
+        //MPI Barrier @ mainthread
         task->barrier->wait();
     }
 
@@ -71,7 +90,7 @@ void run_cthread_variant(int rank, int task_count, std::vector<task_t> &tasks, B
 {
     std::vector<std::thread> threads;
 
-    // Pre communication:
+    // Pre communication: fill input arrays with neighbouring data.
     std::vector<MPI_Request> requests;
     for(int i = 0; i < tasks.size(); i++) {
         fetch_and_update_neighbours(rank, &tasks[i], requests);
@@ -99,45 +118,25 @@ void run_cthread_variant(int rank, int task_count, std::vector<task_t> &tasks, B
         printf("(%d) Waiting barrier main\n", rank);
         barrier->wait();
 
-        if(c == CYCLES - 1) {
-            for(int i = 0; i < tasks.size(); i++) {
-                tasks[i].done = true;
-            }
-        }
+        // Devices switch buffers (on-site)
 
-        // Switch buffers (slow quick & dirty variant)
-        for(int i = 0; i < task_count; i++) {
-            for(int j = 0; j < tasks[i].size; j++) {
-                printf("C%d: (%d) [%d] %d: %f\n", c, rank, i, j, tasks[i].C[j]);
+        // Devices fetch neighbours (on-site)
 
-                tasks[i].A[j] = tasks[i].C[j];
-            }
-        }
-
-        printf("(%d) Updating neighbours\n", rank);
-        std::vector<MPI_Request> requests;
-        for(int i = 0; i < tasks.size(); i++) {
-            fetch_and_update_neighbours(rank, &tasks[i], requests);
-
-            // TODO: now this deadlocks because 3rd patch does not know that the patch changed.
-        }
-
-        MPI_Status* statuses;
-        MPI_Waitall(requests.size(), &requests[0], statuses);
 
         // Split
-        if(c == 3 && rank == 0) {
-            // Arbitrarily (as a test) decide to split.
-            split(&tasks[0], rank, tasks);
-        }
+        // if(c == 3 && rank == 0) {
+        //     // Arbitrarily (as a test) decide to split.
+        //     split(&tasks[0], rank, tasks);
+        // }
 
-        if(c == 3 && rank == 1) {
-            receive_split(rank, 0, tasks);
-        }
-
-        printf("(%d) Waiting MPI\n", rank);
+        // if(c == 3 && rank == 1) {
+        //     receive_split(rank, 0, tasks);
+        // }
 
         //  Sync to wait on all processes.
+        barrier->wait();
+
+        printf("(%d) Waiting MPI\n", rank);
         MPI_Barrier(MPI_COMM_WORLD);
         barrier->wait();
     }

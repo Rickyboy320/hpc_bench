@@ -5,6 +5,8 @@
 #include "task.h"
 
 #define N 10
+#define CYCLES 10
+
 
 int init_cuda();
 void alloc_cuda(task_t* task);

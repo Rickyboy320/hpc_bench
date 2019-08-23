@@ -53,11 +53,14 @@ void dealloc_cuda(task_t* task)
 void* run_cuda(void* v_task)
 {
     task_t* task = (task_t*) v_task;
+    int iteration = task->start_iteration;
+    int rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
     printf("Setting device: %d\n", task->cuda.id);
     cudaSetDevice(task->cuda.id);
 
-    while(!task->done) {
+    for(; iteration < CYCLES; iteration++) {
         // Copy the host input vectors A and B H2D.
 
         printf("A: %p, cudaA: %p, size: %d\n", task->cuda.A, &task->A[-1], task->cuda.size + 2*sizeof(float));
@@ -79,6 +82,25 @@ void* run_cuda(void* v_task)
 
         printf("cuda wait\n");
         task->barrier->wait();
+
+        // Switch buffers
+        for(int j = 0; j < task->size; j++) {
+            printf("C%d: (%d) %d: %f\n", iteration, rank, j, task->C[j]);
+
+            task->A[j] = task->C[j];
+        }
+
+        printf("(%d) Updating neighbours\n", rank);
+        std::vector<MPI_Request> requests;
+        fetch_and_update_neighbours(rank, task, requests);
+        // TODO: now this deadlocks because 3rd patch does not know that the patch changed.
+
+        MPI_Status* statuses;
+        MPI_Waitall(requests.size(), &requests[0], statuses);
+
+
+        task->barrier->wait();
+        //MPI Barrier @ mainthread
         task->barrier->wait();
     }
 

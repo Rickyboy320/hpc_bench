@@ -1,10 +1,10 @@
 CC = mpic++
 NVCC = nvcc
 
-SRC = vector.cpp barrier.cpp task.cpp
+SRC = vector.cpp barrier.cpp task.cpp manager.cpp
 NVSRC = vector.cu
 
-CC_FLAGS = -O3 -I/cm/shared/apps/cuda10.0/toolkit/10.0.130/include/ -L/cm/shared/apps/cuda10.0/toolkit/10.0.130/lib64
+CC_FLAGS = -g -O3 -I/cm/shared/apps/cuda10.0/toolkit/10.0.130/include/ -L/cm/shared/apps/cuda10.0/toolkit/10.0.130/lib64
 NVCC_FLAGS = --default-stream per-thread
 LL_FLAGS = -fopenmp -lcudart
 

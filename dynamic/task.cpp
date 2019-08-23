@@ -4,7 +4,7 @@
 #include "task.h"
 #include "common.h"
 
-void split(task_t* task, int rank, std::vector<task_t> &tasks)
+void split(task_t* task, int rank, int target, std::vector<task_t> tasks)
 {
     task_t new_task;
     int size = task->size;
@@ -14,7 +14,7 @@ void split(task_t* task, int rank, std::vector<task_t> &tasks)
 
     // 'Left split' (original task receives the left side). Might be more favorable to do a right split in some situations.
     new_task.size = size - new_size;
-    new_task.A = &task->A[new_size];
+    new_task.A = &task->A[new_size - 1];
     new_task.C = &task->C[new_size];
     new_task.barrier = task->barrier;
     new_task.prev.rank = rank;
@@ -28,7 +28,6 @@ void split(task_t* task, int rank, std::vector<task_t> &tasks)
         // tasks.push_back(new_task); // Copies value, thus should be done ASAP, and then tasks[i].A = ...
     // } else {
         // int target = findSomeFreeNode();
-        int target = 1;
         task->next.rank = target;
 
         printf("(%d) Initiating task send to %d\n", rank, target);
@@ -39,7 +38,8 @@ void split(task_t* task, int rank, std::vector<task_t> &tasks)
         MPI_Send(new_task.C, new_task.size, MPI_FLOAT, target, 0, MPI_COMM_WORLD);
         MPI_Send(&new_task.next.rank, 1, MPI_INT, target, 0, MPI_COMM_WORLD);
         MPI_Send(&new_task.prev.rank, 1, MPI_INT, target, 0, MPI_COMM_WORLD);
-    //}
+        MPI_Send(&new_task.offset, 1, MPI_INT, target, 0, MPI_COMM_WORLD);
+   //}
 }
 
 void receive_split(int rank, int source, std::vector<task_t> &tasks)
@@ -58,6 +58,7 @@ void receive_split(int rank, int source, std::vector<task_t> &tasks)
     MPI_Recv(tasks[i].C, tasks[i].size, MPI_FLOAT, source, 0, MPI_COMM_WORLD, &status);
     MPI_Recv(&tasks[i].next.rank, 1, MPI_INT, source, 0, MPI_COMM_WORLD, &status);
     MPI_Recv(&tasks[i].prev.rank, 1, MPI_INT, source, 0, MPI_COMM_WORLD, &status);
+    MPI_Recv(&tasks[i].offset, 1, MPI_INT, source, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
     printf("(%d) Received task of size: %d\n", rank, tasks[i].size);
     printf("R-Task: size: %d\n", tasks[i].size);
@@ -65,9 +66,11 @@ void receive_split(int rank, int source, std::vector<task_t> &tasks)
     printf("R-Task: prev: %d\n", tasks[i].prev.rank);
     printf("R-Task: A: %p\n", tasks[i].A);
     printf("R-Task: C: %p\n", tasks[i].C);
+    printf("R-Task: offset: %p\n", tasks[i].offset);
+
 }
 
-void fetch_and_update_neighbours(int rank, task_t* task, std::vector<MPI_Request> &requests)
+void fetch_and_update_neighbours(int rank, task_t* task, std::vector<MPI_Request> &requests, std::vector<int> &types, bool will_split)
 {
     ref_t prevref = task->prev;
     ref_t nextref = task->next;
@@ -75,25 +78,23 @@ void fetch_and_update_neighbours(int rank, task_t* task, std::vector<MPI_Request
     if(prevref.rank != rank && prevref.rank != -1) {
         MPI_Request send_request;
         MPI_Request request;
-        MPI_Isend(&task->A[0], 1, MPI_FLOAT, prevref.rank, 0, MPI_COMM_WORLD, &send_request);
-        MPI_Irecv(&task->A[-1], 1, MPI_FLOAT, prevref.rank, 0, MPI_COMM_WORLD, &request);
+        MPI_Isend(&task->A[0], 1, MPI_FLOAT, prevref.rank, will_split ? 1 : 0, MPI_COMM_WORLD, &send_request);
+        MPI_Irecv(&task->A[-1], 1, MPI_FLOAT, prevref.rank, MPI_ANY_TAG, MPI_COMM_WORLD, &request);
 
         printf("(%d) waiting for prev %d\n", rank, prevref.rank);
         requests.push_back(request);
-    } else if(!prevref.contiguous) {
-        task->A[-1] = *prevref.location;
+        types.push_back(PREV_TYPE);
     }
 
     if(nextref.rank != rank && nextref.rank != -1) {
         MPI_Request send_request;
         MPI_Request request;
-        MPI_Isend(&task->A[task->size - 1], 1, MPI_FLOAT, nextref.rank, 0, MPI_COMM_WORLD, &request);
-        MPI_Irecv(&task->A[task->size], 1, MPI_FLOAT, nextref.rank, 0, MPI_COMM_WORLD, &request);
+        MPI_Isend(&task->A[task->size - 1], 1, MPI_FLOAT, nextref.rank, will_split ? 1 : 0, MPI_COMM_WORLD, &send_request);
+        MPI_Irecv(&task->A[task->size], 1, MPI_FLOAT, nextref.rank, MPI_ANY_TAG, MPI_COMM_WORLD, &request);
 
         printf("(%d) waiting for next %d\n", rank, nextref.rank);
         requests.push_back(request);
-    } else if(!nextref.contiguous) {
-        task->A[task->size] = *nextref.location;
+        types.push_back(NEXT_TYPE);
     }
 }
 
@@ -105,7 +106,7 @@ void init_tasks(std::vector<task_t> &tasks, int task_count, Barrier* barrier, in
     const int length = ceil(N / active_devices);
     int start = rank * length;
 
-    float* A = (float*) malloc(sizeof(float) * length + 2);
+    float* A = (float*) malloc(sizeof(float) * (length + 2));
     float* C = (float*) malloc(sizeof(float) * length);
     for (int i = 0; i < length + 2; i++)
     {
@@ -117,7 +118,9 @@ void init_tasks(std::vector<task_t> &tasks, int task_count, Barrier* barrier, in
     {
         tasks.emplace_back();
         tasks[i].type = i == 0 ? CPU : GPU;
+        tasks[i].id = id++;
         int offset = sizePerDevice * i;
+        tasks[i].offset = offset + start;
         tasks[i].A = &A[offset + 1];
         tasks[i].C = &C[offset];
 
@@ -137,25 +140,21 @@ void init_tasks(std::vector<task_t> &tasks, int task_count, Barrier* barrier, in
         if(i == 0) {
             if(rank == 0) {
                 tasks[i].prev.rank = -1;
-                tasks[i].prev.contiguous = true;
             } else {
                 tasks[i].prev.rank = rank - 1;
             }
         } else {
             tasks[i].prev.rank = rank;
-            tasks[i].prev.contiguous = true;
         }
 
         if(i == task_count - 1) {
             if(rank == active_devices - 1) {
                 tasks[i].next.rank = -1;
-                tasks[i].next.contiguous = true;
             } else {
                 tasks[i].next.rank = rank + 1;
             }
         } else {
             tasks[i].next.rank = rank;
-            tasks[i].next.contiguous = true;
         }
     }
 

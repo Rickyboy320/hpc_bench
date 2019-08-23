@@ -1,5 +1,6 @@
 #include <pthread.h>
 
+#include "manager.h"
 #include "common.h"
 
 #define cudaCheck(ans) { cudaAssert((ans), __FILE__, __LINE__); }
@@ -35,7 +36,7 @@ void alloc_cuda(task_t* task)
     task->cuda.size = task->size * sizeof(float);
 
     // Allocate the device vectors
-    cudaCheck(cudaMalloc((void **)&task->cuda.A, task->cuda.size + 2 * sizeof(float))); // Plus 'imported' neighbours.
+    cudaCheck(cudaMalloc((void **)&task->cuda.A, (task->cuda.size + 2) * sizeof(float))); // Plus 'imported' neighbours.
     cudaCheck(cudaMalloc((void **)&task->cuda.C, task->cuda.size));
 }
 
@@ -63,10 +64,10 @@ void* run_cuda(void* v_task)
     for(; iteration < CYCLES; iteration++) {
         // Copy the host input vectors A and B H2D.
 
-        printf("A: %p, cudaA: %p, size: %d\n", task->cuda.A, &task->A[-1], task->cuda.size + 2*sizeof(float));
+        printf("A: %p, cudaA: %p, size: %d\n", task->cuda.A, &task->A[-1], (task->cuda.size + 2) * sizeof(float));
 
         int inset = 0;
-        cudaCheck(cudaMemcpy(task->cuda.A, &task->A[-1], task->cuda.size + 2 * sizeof(float), cudaMemcpyHostToDevice));
+        cudaCheck(cudaMemcpy(task->cuda.A, &task->A[-1], (task->cuda.size + 2) * sizeof(float), cudaMemcpyHostToDevice));
         inset = 1;
 
         // Launch the vector-add CUDA Kernel
@@ -85,19 +86,45 @@ void* run_cuda(void* v_task)
 
         // Switch buffers
         for(int j = 0; j < task->size; j++) {
-            printf("C%d: (%d) %d: %f\n", iteration, rank, j, task->C[j]);
+            printf("C%d: (%d) [%d] %d: %f\n", iteration, rank, task->id, j, task->C[j]);
 
             task->A[j] = task->C[j];
         }
 
         printf("(%d) Updating neighbours\n", rank);
         std::vector<MPI_Request> requests;
-        fetch_and_update_neighbours(rank, task, requests);
-        // TODO: now this deadlocks because 3rd patch does not know that the patch changed.
+        std::vector<int> types;
+        fetch_and_update_neighbours(rank, task, requests, types, false);
+
+        // Split
+        // if(will_split) {
+        //      // Arbitrarily (as a test) decide to split.
+        //      split(task, rank, target);
+        // }
 
         MPI_Status* statuses;
         MPI_Waitall(requests.size(), &requests[0], statuses);
 
+        for(int i = 0; i < requests.size(); i++) {
+            if(statuses[i].MPI_TAG == 1) {
+                // Received notification of split of target. Will update refs.
+                if(types[i] == NEXT_TYPE) {
+                    int start = task->offset + task->size;
+                    MPI_Send(&start, 1, MPI_INT, 0, LOOKUP, MPI_COMM_WORLD);
+                    int new_rank;
+                    MPI_Recv(&new_rank, 1, MPI_INT, 0, LOOKUP, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                    task->next.rank = new_rank;
+                } else if(types[i] == PREV_TYPE) {
+                    int start = task->offset - 1;
+                    MPI_Send(&start, 1, MPI_INT, 0, LOOKUP, MPI_COMM_WORLD);
+                    int new_rank;
+                    MPI_Recv(&new_rank, 1, MPI_INT, 0, LOOKUP, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                    task->prev.rank = new_rank;
+                } else {
+                    throw std::exception();
+                }
+            }
+        }
 
         task->barrier->wait();
         //MPI Barrier @ mainthread

@@ -5,6 +5,9 @@
 
 #include "barrier.h"
 
+static const int PREV_TYPE = 0;
+static const int NEXT_TYPE = 1;
+
 enum devicetype {
     NONE,
     CPU,
@@ -20,14 +23,14 @@ struct cudamem_t {
 
 struct ref_t {
     int rank;
-    float* location;
-    bool contiguous;
 };
 
 struct task_t {
     devicetype type;
 
+    int offset;
     int size;
+    int id;
 
     float* A;
     float* C;
@@ -40,9 +43,9 @@ struct task_t {
     ref_t prev;
 };
 
-void split(task_t* task, int rank, std::vector<task_t> &tasks);
+void split(task_t* task, int rank, int target);
 void receive_split(int rank, int source, std::vector<task_t> &tasks);
 
-void fetch_and_update_neighbours(int rank, task_t* task, std::vector<MPI_Request> &requests);
+void fetch_and_update_neighbours(int rank, task_t* task, std::vector<MPI_Request> &requests, std::vector<int> &types, bool will_split);
 
 void init_tasks(std::vector<task_t> &tasks, int task_count, Barrier* barrier, int active_devices);

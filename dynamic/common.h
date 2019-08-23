@@ -7,6 +7,7 @@
 #define N 10
 #define CYCLES 10
 
+static int id = 0;
 
 int init_cuda();
 void alloc_cuda(task_t* task);

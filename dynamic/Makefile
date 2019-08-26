@@ -5,7 +5,8 @@ SRC = vector.cpp barrier.cpp task.cpp manager.cpp
 NVSRC = vector.cu
 
 CC_FLAGS = -g -O3 -I/cm/shared/apps/cuda10.0/toolkit/10.0.130/include/ -L/cm/shared/apps/cuda10.0/toolkit/10.0.130/lib64
-NVCC_FLAGS = --default-stream per-thread
+
+NVCC_FLAGS = --default-stream per-thread -I/cm/shared/apps/mpich/ge/gcc/64/3.2/include/
 LL_FLAGS = -fopenmp -lcudart
 
 EXE = vector.out

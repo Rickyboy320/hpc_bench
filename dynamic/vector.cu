@@ -33,11 +33,9 @@ void alloc_cuda(task_t* task)
 {
     cudaSetDevice(task->cuda.id);
 
-    task->cuda.size = task->size * sizeof(float);
-
     // Allocate the device vectors
-    cudaCheck(cudaMalloc((void **)&task->cuda.A, (task->cuda.size + 2) * sizeof(float))); // Plus 'imported' neighbours.
-    cudaCheck(cudaMalloc((void **)&task->cuda.C, task->cuda.size));
+    cudaCheck(cudaMalloc((void **)&task->cuda.A, (task->size + 2) * sizeof(float))); // Plus 'imported' neighbours.
+    cudaCheck(cudaMalloc((void **)&task->cuda.C, task->size * sizeof(float)));
 }
 
 // Deallocate cuda memory and unpin host memory.
@@ -64,10 +62,10 @@ void* run_cuda(void* v_task)
     for(; iteration < CYCLES; iteration++) {
         // Copy the host input vectors A and B H2D.
 
-        printf("A: %p, cudaA: %p, size: %d\n", task->cuda.A, &task->A[-1], (task->cuda.size + 2) * sizeof(float));
+        printf("A: %p, cudaA: %p, size: %d\n", task->cuda.A, &task->A[-1], (task->size + 2) * sizeof(float));
 
         int inset = 0;
-        cudaCheck(cudaMemcpy(task->cuda.A, &task->A[-1], (task->cuda.size + 2) * sizeof(float), cudaMemcpyHostToDevice));
+        cudaCheck(cudaMemcpy(task->cuda.A, &task->A[-1], (task->size + 2) * sizeof(float), cudaMemcpyHostToDevice));
         inset = 1;
 
         // Launch the vector-add CUDA Kernel
@@ -77,7 +75,7 @@ void* run_cuda(void* v_task)
         vectorAdd<<<blocksPerGrid, threadsPerBlock, 0>>>(task->cuda.A, task->cuda.C, task->size, inset);
 
         // Copy the device result vector D2H.
-        cudaCheck(cudaMemcpy(task->C, task->cuda.C, task->cuda.size, cudaMemcpyDeviceToHost));
+        cudaCheck(cudaMemcpy(task->C, task->cuda.C, task->size * sizeof(float), cudaMemcpyDeviceToHost));
 
         cudaCheck(cudaDeviceSynchronize());
 
@@ -102,11 +100,13 @@ void* run_cuda(void* v_task)
         //      split(task, rank, target);
         // }
 
-        MPI_Status* statuses;
-        MPI_Waitall(requests.size(), &requests[0], statuses);
+        MPI_Status statuses[requests.size()];
+        if(!requests.empty()) {
+            MPI_Waitall(requests.size(), &requests[0], statuses);
+        }
 
         for(int i = 0; i < requests.size(); i++) {
-            if(statuses[i].MPI_TAG == 1) {
+            if(statuses[i].MPI_TAG == SPLIT) {
                 // Received notification of split of target. Will update refs.
                 if(types[i] == NEXT_TYPE) {
                     int start = task->offset + task->size;
@@ -124,6 +124,10 @@ void* run_cuda(void* v_task)
                     throw std::exception();
                 }
             }
+        }
+
+        for(int j = -1; j < task->size + 1; j++) {
+            printf("A @ C%d: (%d) [%d] %d: %f\n", iteration, rank, task->id, j, task->A[j]);
         }
 
         task->barrier->wait();

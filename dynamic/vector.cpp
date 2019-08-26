@@ -8,17 +8,16 @@
 #include <sys/time.h>
 #include <cuda_runtime_api.h>
 
+
 #include "task.h"
 #include "common.h"
 #include "barrier.h"
 #include "manager.h"
 
-int init(int* argc, char*** argv)
+int init()
 {
     omp_set_num_threads(omp_get_num_procs());
     printf("Number omp procs: %d\n", omp_get_num_procs());
-
-    MPI_Init(argc, argv);
 
     // Get the rank of the process
     int world_rank;
@@ -83,28 +82,38 @@ void* run_openmp(void* v_task)
              split(task, rank, target);
         }
 
-        MPI_Status* statuses;
-        MPI_Waitall(requests.size(), &requests[0], statuses);
+        for(int i = 0; i < requests.size(); i++) {
+            printf("%p\n", requests[i]);
+        }
+
+        MPI_Status statuses[requests.size()];
+        if(!requests.empty()) {
+            MPI_Waitall(requests.size(), &requests[0], statuses);
+        }
 
         for(int i = 0; i < requests.size(); i++) {
-            if(statuses[i].MPI_TAG == 1) {
+            if(statuses[i].MPI_TAG == SPLIT) {
                 // Received notification of split of target. Will update refs.
                 if(types[i] == NEXT_TYPE) {
                     int start = task->offset + task->size;
-                    MPI_Send(&start, 1, MPI_INT, 0, LOOKUP, MPI_COMM_WORLD);
+                    MPI_Send(&start, 1, MPI_INT, MANAGER_RANK, LOOKUP, MPI_COMM_WORLD);
                     int new_rank;
-                    MPI_Recv(&new_rank, 1, MPI_INT, 0, LOOKUP, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                    MPI_Recv(&new_rank, 1, MPI_INT, MANAGER_RANK, LOOKUP, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
                     task->next.rank = new_rank;
                 } else if(types[i] == PREV_TYPE) {
                     int start = task->offset - 1;
-                    MPI_Send(&start, 1, MPI_INT, 0, LOOKUP, MPI_COMM_WORLD);
+                    MPI_Send(&start, 1, MPI_INT, MANAGER_RANK, LOOKUP, MPI_COMM_WORLD);
                     int new_rank;
-                    MPI_Recv(&new_rank, 1, MPI_INT, 0, LOOKUP, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                    MPI_Recv(&new_rank, 1, MPI_INT, MANAGER_RANK, LOOKUP, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
                     task->prev.rank = new_rank;
                 } else {
                     throw std::exception();
                 }
             }
+        }
+
+        for(int j = -1; j < size + 1; j++) {
+            printf("A @ C%d: (%d) [%d] %d: %f\n", iteration, rank, task->id, j, A[j]);
         }
 
         task->barrier->wait();
@@ -127,10 +136,13 @@ void run_cthread_variant(int rank, int task_count, std::vector<task_t> &tasks, B
         fetch_and_update_neighbours(rank, &tasks[i], requests, types, false);
     }
 
+     for(int i = 0; i < requests.size(); i++) {
+            printf("%p\n", requests[i]);
+        }
+
     printf("(%d) Pre Waiting all\n", rank);
     if(!requests.empty()) {
-        MPI_Status* statuses;
-        MPI_Waitall(requests.size(), &requests[0], statuses);
+        MPI_Waitall(requests.size(), &requests[0], MPI_STATUSES_IGNORE);
     }
 
     printf("(%d) Starting threads: %d\n", rank, tasks.size());
@@ -169,10 +181,10 @@ void run_cthread_variant(int rank, int task_count, std::vector<task_t> &tasks, B
         MPI_Barrier(MPI_COMM_WORLD);
         barrier->wait();
 
-        if(rank == 1 && c == 3) {
-            printf("Launhing new task. on rank 1\n");
-            threads.push_back(std::thread(run_openmp, &tasks[tasks.size() - 1]));
-        }
+        // if(rank == 1 && c == 3) {
+        //     printf("Launhing new task. on rank 1\n");
+        //     threads.push_back(std::thread(run_openmp, &tasks[tasks.size() - 1]));
+        // }
     }
 
     // Wait for all tasks to complete.
@@ -185,6 +197,16 @@ void run_cthread_variant(int rank, int task_count, std::vector<task_t> &tasks, B
 
 int main(int argc, char** argv)
 {
+    int provided;
+    MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
+    if (provided < MPI_THREAD_MULTIPLE)
+    {
+        printf("ERROR: The MPI library does not have full thread support. Provided: %d\n", provided);
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+
+
+    int rank = init();
     // Parse command line args
     std::thread manage_thread;
 
@@ -192,9 +214,6 @@ int main(int argc, char** argv)
     if(argc > 1) {
         active_devices = std::stoi(argv[1]);
     }
-
-    int rank = init(&argc, &argv);
-
     // Distribute tasks evenly over nodes and devices.
     int gpu_count = init_cuda();
     int task_count = rank < active_devices ? gpu_count + 1 : 0;
@@ -208,27 +227,63 @@ int main(int argc, char** argv)
         init_tasks(tasks, task_count, &barrier, active_devices);
     }
 
+    MPI_Comm manager_comm;
+    MPI_Comm_split(MPI_COMM_WORLD, 1, 0, &manager_comm);
+    printf("(%d): Manager comm after split: %p\n", rank, &manager_comm);
+
     if(rank == 0) {
-        manage_thread = std::thread(manage_nodes);
+        manage_thread = std::thread(manage_nodes, &manager_comm);
     }
 
     // Register devices
     int device_count = 1 + gpu_count;
-    printf("(%d) Sending device info: %d.\n", rank, device_count);
-    MPI_Send(&device_count, 1, MPI_INT, 0, DEVICES, MPI_COMM_WORLD);
+    fprintf(stderr, "(%d) Sending device info: %d.\n", rank, device_count);
+    MPI_Send(&device_count, 1, MPI_INT, MANAGER_RANK, DEVICES, manager_comm);
 
     // Register tasks
     for(int i = 0; i < task_count; i++) {
-        printf("(%d) Sending task info.\n", rank);
-        MPI_Send(&tasks[i].offset, 1, MPI_INT, 0, REGISTER, MPI_COMM_WORLD);
-        printf("sent task info.\n");
+        fprintf(stderr, "(%d) Sending task info.\n", rank);
+        MPI_Send(&tasks[i].offset, 1, MPI_INT, MANAGER_RANK, REGISTER, manager_comm);
+        MPI_Send(&tasks[i].id, 1, MPI_INT, MANAGER_RANK, REGISTER, manager_comm);
+        MPI_Send(&tasks[i].size, 1, MPI_INT, MANAGER_RANK, REGISTER, manager_comm);
+
+        fprintf(stderr, "sent task info.\n");
+    }
+
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    for(int i = 0; i < task_count; i++) {
+        if(i == 0 && rank == 0) {
+            tasks[i].prev.rank = -1;
+        } else {
+            int lookup = tasks[i].offset - 1;
+            MPI_Send(&lookup, 1, MPI_INT, MANAGER_RANK, LOOKUP, manager_comm);
+
+            int receive[2];
+            MPI_Recv(&receive, 2, MPI_INT, MANAGER_RANK, LOOKUP, manager_comm, MPI_STATUS_IGNORE);
+
+            tasks[i].prev.rank = receive[0];
+            tasks[i].prev.id = receive[1];
+        }
+        if(i == task_count - 1 && rank == active_devices - 1) {
+            tasks[i].next.rank = -1;
+        } else {
+            int lookup = tasks[i].offset + tasks[i].size;
+            MPI_Send(&lookup, 1, MPI_INT, MANAGER_RANK, LOOKUP, manager_comm);
+
+            int receive[2];
+            MPI_Recv(&receive, 2, MPI_INT, MANAGER_RANK, LOOKUP, manager_comm, MPI_STATUS_IGNORE);
+
+            tasks[i].next.rank = receive[0];
+            tasks[i].next.id = receive[1];
+        }
     }
 
     //  Sync for 'equal' starts.
-    printf("(%d) Barrier\n", rank);
+    fprintf(stderr, "(%d) Barrier\n", rank);
     MPI_Barrier(MPI_COMM_WORLD);
 
-    printf("(%d) Starting\n", rank);
+    fprintf(stderr, "(%d) Starting\n", rank);
 
     // Run tasks
     run_cthread_variant(rank, task_count, tasks, &barrier);
@@ -262,7 +317,7 @@ int main(int argc, char** argv)
         // }
 
         int empty = 0;
-        MPI_Send(&empty, 1, MPI_INT, 0, TERMINATE, MPI_COMM_WORLD);
+        MPI_Send(&empty, 1, MPI_INT, MANAGER_RANK, TERMINATE, manager_comm);
         manage_thread.join();
     }
 

@@ -16,13 +16,13 @@ enum devicetype {
 
 struct cudamem_t {
     int id;
-    int size;
     float* A;
     float* C;
 };
 
 struct ref_t {
     int rank;
+    int id;
 };
 
 struct task_t {

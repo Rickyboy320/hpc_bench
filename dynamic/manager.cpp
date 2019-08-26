@@ -24,7 +24,7 @@ registration_t* find(int offset) {
         }
     }
 
-    throw std::exception();
+    throw std::runtime_error("No registration found containing offset.\n");
 }
 
 bool is_available(int rank, int size) {

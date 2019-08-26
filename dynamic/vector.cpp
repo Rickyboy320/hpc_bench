@@ -107,7 +107,7 @@ void* run_openmp(void* v_task)
                     MPI_Recv(&new_rank, 1, MPI_INT, MANAGER_RANK, LOOKUP, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
                     task->prev.rank = new_rank;
                 } else {
-                    throw std::exception();
+                    throw std::runtime_error("Invalid SPLIT type received.");
                 }
             }
         }
@@ -153,7 +153,7 @@ void run_cthread_variant(int rank, int task_count, std::vector<task_t> &tasks, B
             threads.push_back(std::thread(run_cuda, &tasks[i]));
         } else {
             printf("WARNING: task without type: %p\n", &tasks[i]);
-            throw std::exception();
+            throw std::runtime_error("Task without type.");
         }
     }
 

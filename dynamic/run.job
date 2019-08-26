@@ -1,6 +1,6 @@
 #!/bin/sh
 #SBATCH --time=00:15:00
-#SBATCH -N 2
+#SBATCH -N 3
 #SBATCH --ntasks-per-node=1
 #SBATCH --gres=gpu:1
 
@@ -11,4 +11,4 @@ module load cuda10.0/toolkit/10.0.130
 which mpirun
 which mpiexec
 #mpirun -n 2 valgrind ./vector.out "$@"
-mpirun -n 2 ./vector.out "$@"
+mpirun -n 3 ./vector.out "$@"

@@ -83,8 +83,8 @@ void fetch_and_update_neighbours(int rank, task_t* task, std::vector<MPI_Request
         printf("Sending : %f\n", task->A[0]);
         printf("receiving over %f\n", task->A[-1]);
 
-        MPI_Isend(&task->A[0], 1, MPI_FLOAT, prevref.rank, prevref.id, MPI_COMM_WORLD, &send_request);
-        MPI_Irecv(&task->A[-1], 1, MPI_FLOAT, prevref.rank, task->id, MPI_COMM_WORLD, &request);
+        MPI_Isend(&task->A[0], 1, MPI_FLOAT, prevref.rank, prevref.id * 100 + 1, MPI_COMM_WORLD, &send_request);
+        MPI_Irecv(&task->A[-1], 1, MPI_FLOAT, prevref.rank, task->id * 100 + 0, MPI_COMM_WORLD, &request);
 
         printf("(%d:%d) waiting for prev %d:%d\n", rank, task->id, prevref.rank, prevref.id);
         requests.push_back(request);
@@ -99,9 +99,8 @@ void fetch_and_update_neighbours(int rank, task_t* task, std::vector<MPI_Request
         printf("NSending: %f\n", task->A[task->size - 1]);
         printf("NReceiving over %f (%p) to %d:%d\n", task->A[task->size], &task->A[task->size], nextref.rank, task->id);
 
-
-        MPI_Isend(&task->A[task->size - 1], 1, MPI_FLOAT, nextref.rank, nextref.id, MPI_COMM_WORLD, &send_request);
-        MPI_Irecv(&task->A[task->size], 1, MPI_FLOAT, nextref.rank, task->id, MPI_COMM_WORLD, &request);
+        MPI_Isend(&task->A[task->size - 1], 1, MPI_FLOAT, nextref.rank, nextref.id * 100 + 0, MPI_COMM_WORLD, &send_request);
+        MPI_Irecv(&task->A[task->size], 1, MPI_FLOAT, nextref.rank, task->id * 100 + 1, MPI_COMM_WORLD, &request);
 
         printf("(%d:%d) waiting for next %d:%d\n", rank, task->id, nextref.rank, nextref.id);
         requests.push_back(request);
@@ -115,8 +114,14 @@ void init_tasks(std::vector<task_t> &tasks, int task_count, Barrier* barrier, in
     int rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
-    const int length = ceil(N / active_devices);
+    int length = ceil(N / active_devices);
     int start = rank * length;
+
+    if(rank == active_devices - 1) {
+        length = N - length * (active_devices - 1);
+    }
+
+    printf("(%d) Length: %d\n", rank, length);
 
     // float* A = (float*) malloc(sizeof(float) * (length + 2));
     // float* C = (float*) malloc(sizeof(float) * length);
@@ -125,7 +130,7 @@ void init_tasks(std::vector<task_t> &tasks, int task_count, Barrier* barrier, in
     //     A[i] = 1;
     // }
 
-    int sizePerDevice = ceil(length / (task_count));
+    int sizePerDevice = ceil(length / task_count);
     for(int i = 0; i < task_count; i++)
     {
         tasks.emplace_back();

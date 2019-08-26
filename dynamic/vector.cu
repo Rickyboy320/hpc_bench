@@ -121,7 +121,7 @@ void* run_cuda(void* v_task)
                     MPI_Recv(&new_rank, 1, MPI_INT, 0, LOOKUP, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
                     task->prev.rank = new_rank;
                 } else {
-                    throw std::exception();
+                    throw std::runtime_error("CUDA: Invalid SPLIT type received.");
                 }
             }
         }

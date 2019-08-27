@@ -71,7 +71,7 @@ void receive_split(int rank, int source, std::vector<task_t> &tasks)
 
 }
 
-void fetch_and_update_neighbours(int rank, task_t* task, std::vector<MPI_Request> &requests, std::vector<int> &types, bool will_split)
+void fetch_and_update_neighbours(int rank, task_t* task, std::vector<MPI_Receive_req> &requests, std::vector<int> &types, bool will_split)
 {
     ref_t prevref = task->prev;
     ref_t nextref = task->next;
@@ -83,12 +83,17 @@ void fetch_and_update_neighbours(int rank, task_t* task, std::vector<MPI_Request
         printf("Sending : %f\n", task->A[0]);
         printf("receiving over %f\n", task->A[-1]);
 
-        MPI_Isend(&task->A[0], 1, MPI_FLOAT, prevref.rank, prevref.id * 100 + 1, MPI_COMM_WORLD, &send_request);
-        MPI_Irecv(&task->A[-1], 1, MPI_FLOAT, prevref.rank, task->id * 100 + 0, MPI_COMM_WORLD, &request);
+        MPI_Isend(&task->A[0], 1, MPI_FLOAT, prevref.rank, construct_tag(prevref.id, 1, 0), MPI_COMM_WORLD, &send_request);
+        // MPI_Irecv(&task->A[-1], 1, MPI_FLOAT, prevref.rank, task->id * 100 + 0, MPI_COMM_WORLD, &request);
+        requests.emplace_back();
+        int i = requests.size() - 1;
+        requests[i].buffer = &task->A[-1];
+        requests[i].count = 1;
+        requests[i].datatype = MPI_FLOAT;
+        requests[i].source = prevref.rank;
+        requests[i].tag_matcher = [task](int tag) { return match_tag(task->id, 0, -1, tag); };
 
         printf("(%d:%d) waiting for prev %d:%d\n", rank, task->id, prevref.rank, prevref.id);
-        requests.push_back(request);
-        requests.push_back(send_request);
         types.push_back(PREV_TYPE);
     }
 
@@ -99,17 +104,22 @@ void fetch_and_update_neighbours(int rank, task_t* task, std::vector<MPI_Request
         printf("NSending: %f\n", task->A[task->size - 1]);
         printf("NReceiving over %f (%p) to %d:%d\n", task->A[task->size], &task->A[task->size], nextref.rank, task->id);
 
-        MPI_Isend(&task->A[task->size - 1], 1, MPI_FLOAT, nextref.rank, nextref.id * 100 + 0, MPI_COMM_WORLD, &send_request);
-        MPI_Irecv(&task->A[task->size], 1, MPI_FLOAT, nextref.rank, task->id * 100 + 1, MPI_COMM_WORLD, &request);
+        MPI_Isend(&task->A[task->size - 1], 1, MPI_FLOAT, nextref.rank, construct_tag(nextref.id, 0, 0), MPI_COMM_WORLD, &send_request);
+        // MPI_Irecv(&task->A[task->size], 1, MPI_FLOAT, nextref.rank, task->id * 100 + 1, MPI_COMM_WORLD, &request);
+        requests.emplace_back();
+        int i = requests.size() - 1;
+        requests[i].buffer = &task->A[task->size];
+        requests[i].count = 1;
+        requests[i].datatype = MPI_FLOAT;
+        requests[i].source = nextref.rank;
+        requests[i].tag_matcher = [task](int tag) { return match_tag(task->id, 1, -1, tag); };
 
         printf("(%d:%d) waiting for next %d:%d\n", rank, task->id, nextref.rank, nextref.id);
-        requests.push_back(request);
-        requests.push_back(send_request);
         types.push_back(NEXT_TYPE);
     }
 }
 
-void init_tasks(std::vector<task_t> &tasks, int task_count, Barrier* barrier, int active_devices)
+void init_tasks(std::vector<task_t> &tasks, int task_count, Barrier* barrier, MPI_Comm* manager, int active_devices)
 {
     int rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
@@ -148,6 +158,7 @@ void init_tasks(std::vector<task_t> &tasks, int task_count, Barrier* barrier, in
         }
 
         tasks[i].barrier = barrier;
+        tasks[i].manager = manager;
         tasks[i].start_iteration = 0;
 
         tasks[i].A = (float*) malloc(sizeof(float) * (tasks[i].size + 2));

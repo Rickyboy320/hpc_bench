@@ -2,13 +2,16 @@
 
 #include <mpi.h>
 
-static const int REGISTER = 10000;
-static const int LOOKUP = 10001;
-static const int FREE = 10002;
-static const int DEVICES = 10003;
-static const int TERMINATE = 10004;
+static const int REGISTER = 0;
+static const int LOOKUP = 1;
+static const int FREE = 2;
+static const int DEVICES = 3;
+static const int TERMINATE = 4;
 
-static const int SPLIT = 5000;
+static int MANAGER_TAGS_LENGTH = 5;
+static int MANAGER_TAGS[] = {REGISTER, LOOKUP, FREE, DEVICES, TERMINATE};
+
+static const int SPLIT = 10;
 
 static const int MANAGER_RANK = 0;
 

@@ -90,7 +90,7 @@ void* run_cuda(void* v_task)
         }
 
         printf("(%d) Updating neighbours\n", rank);
-        std::vector<MPI_Request> requests;
+        std::vector<MPI_Receive_req> requests;
         std::vector<int> types;
         fetch_and_update_neighbours(rank, task, requests, types, false);
 
@@ -102,7 +102,7 @@ void* run_cuda(void* v_task)
 
         MPI_Status statuses[requests.size()];
         if(!requests.empty()) {
-            MPI_Waitall(requests.size(), &requests[0], statuses);
+            MPI_Recv_all(requests, MPI_COMM_WORLD, statuses);
         }
 
         for(int i = 0; i < requests.size(); i++) {

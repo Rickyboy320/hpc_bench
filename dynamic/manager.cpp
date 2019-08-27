@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include "mpi.h"
 #include "manager.h"
+#include "common.h"
 
 struct registration_t
 {
@@ -62,7 +63,7 @@ void manage_nodes(void* v_comm)
 
         int buffer;
         printf("Hello loop, comm: %p\n", &manager_comm);
-        MPI_Recv(&buffer, 1, MPI_INT, MPI_ANY_SOURCE, MPI_ANY_TAG, manager_comm, &status);
+        MPI_Recv(&buffer, 1, MPI_INT, MPI_ANY_SOURCE, manager_comm, &status, MANAGER_TAGS, MANAGER_TAGS_LENGTH);
 
         if(status.MPI_TAG == REGISTER) {
             int source = status.MPI_SOURCE;

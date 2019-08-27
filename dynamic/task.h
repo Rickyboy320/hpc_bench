@@ -38,14 +38,24 @@ struct task_t {
 
     cudamem_t cuda;
     Barrier* barrier;
+    MPI_Comm* manager;
 
     ref_t next;
     ref_t prev;
 };
 
+struct MPI_Receive_req {
+    bool completed;
+    void* buffer;
+    int count;
+    MPI_Datatype datatype;
+    int source;
+    std::function<bool(int)> tag_matcher;
+};
+
 void split(task_t* task, int rank, int target);
 void receive_split(int rank, int source, std::vector<task_t> &tasks);
 
-void fetch_and_update_neighbours(int rank, task_t* task, std::vector<MPI_Request> &requests, std::vector<int> &types, bool will_split);
+void fetch_and_update_neighbours(int rank, task_t* task, std::vector<MPI_Receive_req> &requests, std::vector<int> &types, bool will_split);
 
-void init_tasks(std::vector<task_t> &tasks, int task_count, Barrier* barrier, int active_devices);
+void init_tasks(std::vector<task_t> &tasks, int task_count, Barrier* barrier, MPI_Comm* manager, int active_devices);

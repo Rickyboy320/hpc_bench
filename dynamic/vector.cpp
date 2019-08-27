@@ -42,6 +42,8 @@ void* run_openmp(void* v_task)
     int size = task->size;
     int iteration = task->start_iteration;
     int rank;
+    MPI_Comm manager_comm = *task->manager;
+
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
     printf("ompt task: %p\n", task);
@@ -72,7 +74,7 @@ void* run_openmp(void* v_task)
         int target = 1;
         bool will_split = false; //iteration == 3 && rank == 0;
         printf("(%d) Updating neighbours\n", rank);
-        std::vector<MPI_Request> requests;
+        std::vector<MPI_Receive_req> requests;
         std::vector<int> types;
         fetch_and_update_neighbours(rank, task, requests, types, will_split);
 
@@ -88,7 +90,7 @@ void* run_openmp(void* v_task)
 
         MPI_Status statuses[requests.size()];
         if(!requests.empty()) {
-            MPI_Waitall(requests.size(), &requests[0], statuses);
+            MPI_Recv_all(requests, MPI_COMM_WORLD, statuses);
         }
 
         for(int i = 0; i < requests.size(); i++) {
@@ -96,15 +98,16 @@ void* run_openmp(void* v_task)
                 // Received notification of split of target. Will update refs.
                 if(types[i] == NEXT_TYPE) {
                     int start = task->offset + task->size;
-                    MPI_Send(&start, 1, MPI_INT, MANAGER_RANK, LOOKUP, MPI_COMM_WORLD);
-                    int new_rank;
-                    MPI_Recv(&new_rank, 1, MPI_INT, MANAGER_RANK, LOOKUP, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                    task->next.rank = new_rank;
+                    MPI_Send(&start, 1, MPI_INT, MANAGER_RANK, LOOKUP, manager_comm);
+                    int package[2];
+                    MPI_Recv(&package, 1, MPI_INT, MANAGER_RANK, LOOKUP, manager_comm, MPI_STATUS_IGNORE);
+                    task->next.rank = package[0];
+                    task->next.id = package[1];
                 } else if(types[i] == PREV_TYPE) {
                     int start = task->offset - 1;
-                    MPI_Send(&start, 1, MPI_INT, MANAGER_RANK, LOOKUP, MPI_COMM_WORLD);
+                    MPI_Send(&start, 1, MPI_INT, MANAGER_RANK, LOOKUP, manager_comm);
                     int new_rank;
-                    MPI_Recv(&new_rank, 1, MPI_INT, MANAGER_RANK, LOOKUP, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                    MPI_Recv(&new_rank, 1, MPI_INT, MANAGER_RANK, LOOKUP, manager_comm, MPI_STATUS_IGNORE);
                     task->prev.rank = new_rank;
                 } else {
                     throw std::runtime_error("Invalid SPLIT type received.");
@@ -130,7 +133,7 @@ void run_cthread_variant(int rank, int task_count, std::vector<task_t> &tasks, B
     std::vector<std::thread> threads;
 
     // Pre communication: fill input arrays with neighbouring data.
-    std::vector<MPI_Request> requests;
+    std::vector<MPI_Receive_req> requests;
     std::vector<int> types;
     for(int i = 0; i < tasks.size(); i++) {
         fetch_and_update_neighbours(rank, &tasks[i], requests, types, false);
@@ -142,7 +145,7 @@ void run_cthread_variant(int rank, int task_count, std::vector<task_t> &tasks, B
 
     printf("(%d) Pre Waiting all\n", rank);
     if(!requests.empty()) {
-        MPI_Waitall(requests.size(), &requests[0], MPI_STATUSES_IGNORE);
+        MPI_Recv_all(requests, MPI_COMM_WORLD, MPI_STATUSES_IGNORE);
     }
 
     printf("(%d) Starting threads: %d\n", rank, tasks.size());
@@ -222,14 +225,14 @@ int main(int argc, char** argv)
 
     Barrier barrier(task_count + 1);
 
-    std::vector<task_t> tasks;
-    if(task_count > 0) {
-        init_tasks(tasks, task_count, &barrier, active_devices);
-    }
-
     MPI_Comm manager_comm;
     MPI_Comm_split(MPI_COMM_WORLD, 1, 0, &manager_comm);
     printf("(%d): Manager comm after split: %p\n", rank, &manager_comm);
+
+    std::vector<task_t> tasks;
+    if(task_count > 0) {
+        init_tasks(tasks, task_count, &barrier, &manager_comm, active_devices);
+    }
 
     if(rank == 0) {
         manage_thread = std::thread(manage_nodes, &manager_comm);

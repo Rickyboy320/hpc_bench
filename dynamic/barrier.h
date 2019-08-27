@@ -19,4 +19,6 @@ public:
     Barrier(unsigned initialCount);
 
     void wait();
+
+    void resize(int new_size);
 };

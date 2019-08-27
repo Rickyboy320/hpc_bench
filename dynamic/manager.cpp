@@ -28,6 +28,17 @@ registration_t* find(int offset) {
     throw std::runtime_error("No registration found containing offset.\n");
 }
 
+registration_t* get_registration(int rank, int deviceID) {
+    for (registration_t* x : registrations)
+    {
+        if(x->rank == rank && x->deviceID == deviceID) {
+            return x;
+        }
+    }
+
+    throw std::runtime_error("No registration found for rank and device id.\n");
+}
+
 bool is_available(int rank, int size) {
     int num_devices = device_map.find(rank)->second;
     for (registration_t* x : registrations)
@@ -62,7 +73,7 @@ void manage_nodes(void* v_comm)
         MPI_Status status;
 
         int buffer;
-        printf("Hello loop, comm: %p\n", &manager_comm);
+        printf("Hello loop, comm: %p. World comm: %p\n", manager_comm, MPI_COMM_WORLD);
         MPI_Recv(&buffer, 1, MPI_INT, MPI_ANY_SOURCE, manager_comm, &status, MANAGER_TAGS, MANAGER_TAGS_LENGTH);
 
         if(status.MPI_TAG == REGISTER) {
@@ -88,6 +99,15 @@ void manage_nodes(void* v_comm)
             device_map.insert({source, num_devices});
 
             printf("Received device count. Rank %d has %d devices\n", source, num_devices);
+        } else if(status.MPI_TAG == UPDATE) {
+            int source = status.MPI_SOURCE;
+            int deviceID = buffer;
+            int size;
+            MPI_Recv(&size, 1, MPI_INT, status.MPI_SOURCE, UPDATE, manager_comm, MPI_STATUS_IGNORE);
+            registration_t* reg = get_registration(source, deviceID);
+            reg->size = size;
+
+            printf("Received update. Rank %d, device %d now has length: %d\n", source, deviceID, size);
         } else if(status.MPI_TAG == LOOKUP) {
             int source = status.MPI_SOURCE;
             int start = buffer;

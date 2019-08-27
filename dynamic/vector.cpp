@@ -39,7 +39,6 @@ void* run_openmp(void* v_task)
     task_t* task = (task_t*) v_task;
     float* A = task->A;
     float* C = task->C;
-    int size = task->size;
     int iteration = task->start_iteration;
     int rank;
     MPI_Comm manager_comm = *task->manager;
@@ -52,6 +51,8 @@ void* run_openmp(void* v_task)
     printf("omp iteration: %d\n", iteration);
 
     for(; iteration < CYCLES; iteration++) {
+        int size = task->size;
+
         // Run task (sum neighbours) with OpenMP
         int i;
         #pragma omp parallel for private(i) shared(A,C)
@@ -72,17 +73,11 @@ void* run_openmp(void* v_task)
         }
 
         int target = 1;
-        bool will_split = false; //iteration == 3 && rank == 0;
+        bool will_split = iteration == 3 && rank == 0;
         printf("(%d) Updating neighbours\n", rank);
         std::vector<MPI_Receive_req> requests;
         std::vector<int> types;
         fetch_and_update_neighbours(rank, task, requests, types, will_split);
-
-        // Split
-        if(will_split) {
-             // Arbitrarily (as a test) decide to split.
-             split(task, rank, target);
-        }
 
         for(int i = 0; i < requests.size(); i++) {
             printf("%p\n", requests[i]);
@@ -93,34 +88,44 @@ void* run_openmp(void* v_task)
             MPI_Recv_all(requests, MPI_COMM_WORLD, statuses);
         }
 
+        for(int j = -1; j < size + 1; j++) {
+            printf("A @ C%d: (%d) [%d] %d: %f\n", iteration, rank, task->id, j, A[j]);
+        }
+
+        // Split
+        if(will_split) {
+             // Arbitrarily (as a test) decide to split.
+             split(task, rank, target);
+        }
+
+        task->barrier->wait();
+        // MPI barrier
+        task->barrier->wait();
+
         for(int i = 0; i < requests.size(); i++) {
-            if(statuses[i].MPI_TAG == SPLIT) {
+            if(match_tag(-1, -1, SPLIT, statuses[i].MPI_TAG)) {
                 // Received notification of split of target. Will update refs.
                 if(types[i] == NEXT_TYPE) {
+                    printf("(%d:%d) Update nextref\n", rank, id);
                     int start = task->offset + task->size;
                     MPI_Send(&start, 1, MPI_INT, MANAGER_RANK, LOOKUP, manager_comm);
                     int package[2];
-                    MPI_Recv(&package, 1, MPI_INT, MANAGER_RANK, LOOKUP, manager_comm, MPI_STATUS_IGNORE);
+                    MPI_Recv(&package, 2, MPI_INT, MANAGER_RANK, LOOKUP, manager_comm, MPI_STATUS_IGNORE);
                     task->next.rank = package[0];
                     task->next.id = package[1];
                 } else if(types[i] == PREV_TYPE) {
+                    printf("(%d:%d) Update prevref\n", rank, id);
                     int start = task->offset - 1;
                     MPI_Send(&start, 1, MPI_INT, MANAGER_RANK, LOOKUP, manager_comm);
-                    int new_rank;
-                    MPI_Recv(&new_rank, 1, MPI_INT, MANAGER_RANK, LOOKUP, manager_comm, MPI_STATUS_IGNORE);
-                    task->prev.rank = new_rank;
+                    int package[2];
+                    MPI_Recv(&package, 2, MPI_INT, MANAGER_RANK, LOOKUP, manager_comm, MPI_STATUS_IGNORE);
+                    task->prev.rank = package[0];
+                    task->prev.id = package[1];
                 } else {
                     throw std::runtime_error("Invalid SPLIT type received.");
                 }
             }
         }
-
-        for(int j = -1; j < size + 1; j++) {
-            printf("A @ C%d: (%d) [%d] %d: %f\n", iteration, rank, task->id, j, A[j]);
-        }
-
-        task->barrier->wait();
-        //MPI Barrier @ mainthread
         task->barrier->wait();
     }
 
@@ -128,7 +133,7 @@ void* run_openmp(void* v_task)
     pthread_exit(NULL);
 }
 
-void run_cthread_variant(int rank, int task_count, std::vector<task_t> &tasks, Barrier* barrier)
+void run_cthread_variant(int rank, int task_count, std::vector<task_t> &tasks, Barrier* barrier, MPI_Comm& manager)
 {
     std::vector<std::thread> threads;
 
@@ -168,14 +173,15 @@ void run_cthread_variant(int rank, int task_count, std::vector<task_t> &tasks, B
 
         // Devices fetch neighbours (on-site)
 
-        // if(rank == 1 && c == 3) {
-        //     printf("Receiving task...\n");
-        //     receive_split(rank, 0, tasks);
-        //     int index = tasks.size() - 1;
-        //     tasks[index].type = CPU;
-        //     tasks[index].start_iteration = c + 1;
-        //     tasks[index].barrier = barrier;
-        // }
+        if(rank == 1 && c == 3) {
+            printf("Receiving task...\n");
+            receive_split(rank, 0, tasks, manager);
+            int index = tasks.size() - 1;
+            tasks[index].type = CPU;
+            tasks[index].start_iteration = c + 1;
+            tasks[index].barrier = barrier;
+            tasks[index].manager = &manager;
+        }
 
         //  Sync to wait on all processes.
         barrier->wait();
@@ -183,11 +189,14 @@ void run_cthread_variant(int rank, int task_count, std::vector<task_t> &tasks, B
         printf("(%d) Waiting MPI\n", rank);
         MPI_Barrier(MPI_COMM_WORLD);
         barrier->wait();
+        barrier->wait();
 
-        // if(rank == 1 && c == 3) {
-        //     printf("Launhing new task. on rank 1\n");
-        //     threads.push_back(std::thread(run_openmp, &tasks[tasks.size() - 1]));
-        // }
+        if(rank == 1 && c == 3) {
+            printf("Launhing new task. on rank 1\n");
+            threads.push_back(std::thread(run_openmp, &tasks[tasks.size() - 1]));
+            task_count++;
+            barrier->resize(task_count + 1);
+        }
     }
 
     // Wait for all tasks to complete.
@@ -289,7 +298,7 @@ int main(int argc, char** argv)
     fprintf(stderr, "(%d) Starting\n", rank);
 
     // Run tasks
-    run_cthread_variant(rank, task_count, tasks, &barrier);
+    run_cthread_variant(rank, task_count, tasks, &barrier, manager_comm);
 
     for(int i = 0; i < task_count; i++)
     {

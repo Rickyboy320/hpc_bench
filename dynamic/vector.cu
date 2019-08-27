@@ -105,33 +105,38 @@ void* run_cuda(void* v_task)
             MPI_Recv_all(requests, MPI_COMM_WORLD, statuses);
         }
 
-        for(int i = 0; i < requests.size(); i++) {
-            if(statuses[i].MPI_TAG == SPLIT) {
-                // Received notification of split of target. Will update refs.
-                if(types[i] == NEXT_TYPE) {
-                    int start = task->offset + task->size;
-                    MPI_Send(&start, 1, MPI_INT, 0, LOOKUP, MPI_COMM_WORLD);
-                    int new_rank;
-                    MPI_Recv(&new_rank, 1, MPI_INT, 0, LOOKUP, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                    task->next.rank = new_rank;
-                } else if(types[i] == PREV_TYPE) {
-                    int start = task->offset - 1;
-                    MPI_Send(&start, 1, MPI_INT, 0, LOOKUP, MPI_COMM_WORLD);
-                    int new_rank;
-                    MPI_Recv(&new_rank, 1, MPI_INT, 0, LOOKUP, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                    task->prev.rank = new_rank;
-                } else {
-                    throw std::runtime_error("CUDA: Invalid SPLIT type received.");
-                }
-            }
-        }
-
         for(int j = -1; j < task->size + 1; j++) {
             printf("A @ C%d: (%d) [%d] %d: %f\n", iteration, rank, task->id, j, task->A[j]);
         }
 
         task->barrier->wait();
-        //MPI Barrier @ mainthread
+        // MPI wait
+        task->barrier->wait();
+        for(int i = 0; i < requests.size(); i++) {
+            printf("Checking for split: %d\n", statuses[i].MPI_TAG);
+            if(match_tag(-1, -1, SPLIT, statuses[i].MPI_TAG)) {
+                // Received notification of split of target. Will update refs.
+                if(types[i] == NEXT_TYPE) {
+                    printf("(%d:%d) Update nextref\n", rank, task->id);
+                    int start = task->offset + task->size;
+                    MPI_Send(&start, 1, MPI_INT, MANAGER_RANK, LOOKUP, *task->manager);
+                    int package[2];
+                    MPI_Recv(&package, 2, MPI_INT, MANAGER_RANK, LOOKUP, *task->manager, MPI_STATUS_IGNORE);
+                    task->next.rank = package[0];
+                    task->next.id = package[1];
+                } else if(types[i] == PREV_TYPE) {
+                    printf("(%d:%d) Update prevref\n", rank, task->id);
+                    int start = task->offset - 1;
+                    MPI_Send(&start, 1, MPI_INT, MANAGER_RANK, LOOKUP, *task->manager);
+                    int package[2];
+                    MPI_Recv(&package, 2, MPI_INT, MANAGER_RANK, LOOKUP, *task->manager, MPI_STATUS_IGNORE);
+                    task->prev.rank = package[0];
+                    task->prev.id = package[1];
+                } else {
+                    throw std::runtime_error("Invalid SPLIT type received.");
+                }
+            }
+        }
         task->barrier->wait();
     }
 

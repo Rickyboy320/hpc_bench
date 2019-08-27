@@ -13,7 +13,7 @@ void Barrier::wait()
 {
     std::unique_lock<std::mutex> lock(m_mtx);
     m_count--;
-    if (m_count == 0)
+    if (m_count <= 0)
     {
         m_generation++;
         m_count = m_number_threads;
@@ -24,4 +24,13 @@ void Barrier::wait()
         unsigned generation = m_generation;
         m_cv.wait(lock, [this, generation]{ return m_generation != generation; });
     }
+}
+
+void Barrier::resize(int new_size) {
+    std::unique_lock<std::mutex> lock(m_mtx);
+
+    m_count = new_size - (m_number_threads - m_count);
+    m_number_threads = new_size;
+
+    lock.unlock();
 }

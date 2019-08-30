@@ -59,6 +59,9 @@ void* run_cuda(void* v_task)
     printf("Setting device: %d\n", task->cuda.id);
     cudaSetDevice(task->cuda.id);
 
+    printf("(%d) Waiting start cud barrier: size: %d\n", rank, task->start_barrier->get_size());
+    task->start_barrier->wait();
+
     for(; iteration < CYCLES; iteration++) {
         // Copy the host input vectors A and B H2D.
 
@@ -89,16 +92,12 @@ void* run_cuda(void* v_task)
             task->A[j] = task->C[j];
         }
 
+        int target = 1;
+        bool will_split = false;
         printf("(%d) Updating neighbours\n", rank);
         std::vector<MPI_Receive_req> requests;
         std::vector<int> types;
-        fetch_and_update_neighbours(rank, task, requests, types, false);
-
-        // Split
-        // if(will_split) {
-        //      // Arbitrarily (as a test) decide to split.
-        //      split(task, rank, target);
-        // }
+        fetch_and_update_neighbours(rank, task, requests, types, will_split);
 
         MPI_Status statuses[requests.size()];
         if(!requests.empty()) {
@@ -109,15 +108,21 @@ void* run_cuda(void* v_task)
             printf("A @ C%d: (%d) [%d] %d: %f\n", iteration, rank, task->id, j, task->A[j]);
         }
 
+        // Split
+        if(will_split) {
+            // Arbitrarily (as a test) decide to split.
+            split(task, rank, target);
+       }
+
         task->barrier->wait();
         // MPI wait
         task->barrier->wait();
+
         for(int i = 0; i < requests.size(); i++) {
-            printf("Checking for split: %d\n", statuses[i].MPI_TAG);
-            if(match_tag(-1, -1, SPLIT, statuses[i].MPI_TAG)) {
+            if(match_tag(-1, -1, WILL_SPLIT, statuses[i].MPI_TAG)) {
                 // Received notification of split of target. Will update refs.
                 if(types[i] == NEXT_TYPE) {
-                    printf("(%d:%d) Update nextref\n", rank, task->id);
+                    printf("(%d:%d) Update nextref\n", rank, id);
                     int start = task->offset + task->size;
                     MPI_Send(&start, 1, MPI_INT, MANAGER_RANK, LOOKUP, *task->manager);
                     int package[2];
@@ -125,7 +130,7 @@ void* run_cuda(void* v_task)
                     task->next.rank = package[0];
                     task->next.id = package[1];
                 } else if(types[i] == PREV_TYPE) {
-                    printf("(%d:%d) Update prevref\n", rank, task->id);
+                    printf("(%d:%d) Update prevref\n", rank, id);
                     int start = task->offset - 1;
                     MPI_Send(&start, 1, MPI_INT, MANAGER_RANK, LOOKUP, *task->manager);
                     int package[2];
@@ -137,7 +142,10 @@ void* run_cuda(void* v_task)
                 }
             }
         }
-        task->barrier->wait();
+
+
+        printf("(%d) Waiting end cuda start barrier: size: %d\n", rank, task->start_barrier->get_size());
+        task->start_barrier->wait();
     }
 
     printf("cuda done\n");

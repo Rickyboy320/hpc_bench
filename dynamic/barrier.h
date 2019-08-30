@@ -19,6 +19,12 @@ public:
     Barrier(unsigned initialCount);
 
     void wait();
-
+    void expand();
+    void shrink();
     void resize(int new_size);
+
+    int get_size();
+
+private:
+    void resize_barrier(int new_size);
 };

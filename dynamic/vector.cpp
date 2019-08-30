@@ -13,6 +13,7 @@
 #include "common.h"
 #include "barrier.h"
 #include "manager.h"
+#include "devicemanager.h"
 
 int init()
 {
@@ -45,10 +46,8 @@ void* run_openmp(void* v_task)
 
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
-    printf("ompt task: %p\n", task);
-
-    printf("omp A: %p\n", A);
-    printf("omp iteration: %d\n", iteration);
+    printf("(%d:%d) Waiting start omp barrier: size: %d\n", rank, task->id, task->start_barrier->get_size());
+    task->start_barrier->wait();
 
     for(; iteration < CYCLES; iteration++) {
         int size = task->size;
@@ -79,10 +78,6 @@ void* run_openmp(void* v_task)
         std::vector<int> types;
         fetch_and_update_neighbours(rank, task, requests, types, will_split);
 
-        for(int i = 0; i < requests.size(); i++) {
-            printf("%p\n", requests[i]);
-        }
-
         MPI_Status statuses[requests.size()];
         if(!requests.empty()) {
             MPI_Recv_all(requests, MPI_COMM_WORLD, statuses);
@@ -103,7 +98,7 @@ void* run_openmp(void* v_task)
         task->barrier->wait();
 
         for(int i = 0; i < requests.size(); i++) {
-            if(match_tag(-1, -1, SPLIT, statuses[i].MPI_TAG)) {
+            if(match_tag(-1, -1, WILL_SPLIT, statuses[i].MPI_TAG)) {
                 // Received notification of split of target. Will update refs.
                 if(types[i] == NEXT_TYPE) {
                     printf("(%d:%d) Update nextref\n", rank, id);
@@ -126,27 +121,23 @@ void* run_openmp(void* v_task)
                 }
             }
         }
-        task->barrier->wait();
+
+        printf("(%d:%d) Waiting endsdtart omp barrier: size: %d\n", rank, task->id, task->start_barrier->get_size());
+        task->start_barrier->wait();
     }
 
     printf("omp done\n");
     pthread_exit(NULL);
 }
 
-void run_cthread_variant(int rank, int task_count, std::vector<task_t> &tasks, Barrier* barrier, MPI_Comm& manager)
+void run_cthread_variant(int rank, std::vector<task_t> &tasks, Barrier* barrier, Barrier* start_barrier, MPI_Comm& manager, std::thread* device_thread, std::vector<std::thread>& threads, int* iteration)
 {
-    std::vector<std::thread> threads;
-
     // Pre communication: fill input arrays with neighbouring data.
     std::vector<MPI_Receive_req> requests;
     std::vector<int> types;
     for(int i = 0; i < tasks.size(); i++) {
         fetch_and_update_neighbours(rank, &tasks[i], requests, types, false);
     }
-
-     for(int i = 0; i < requests.size(); i++) {
-            printf("%p\n", requests[i]);
-        }
 
     printf("(%d) Pre Waiting all\n", rank);
     if(!requests.empty()) {
@@ -165,7 +156,10 @@ void run_cthread_variant(int rank, int task_count, std::vector<task_t> &tasks, B
         }
     }
 
-    for(int c = 0; c < CYCLES; c++) {
+    printf("(%d) Waiting start barrier: size: %d\n", rank, start_barrier->get_size());
+    start_barrier->wait();
+
+    for(; *iteration < CYCLES; (*iteration)++) {
         printf("(%d) Waiting barrier main\n", rank);
         barrier->wait();
 
@@ -173,34 +167,25 @@ void run_cthread_variant(int rank, int task_count, std::vector<task_t> &tasks, B
 
         // Devices fetch neighbours (on-site)
 
-        if(rank == 1 && c == 3) {
-            printf("Receiving task...\n");
-            receive_split(rank, 0, tasks, manager);
-            int index = tasks.size() - 1;
-            tasks[index].type = CPU;
-            tasks[index].start_iteration = c + 1;
-            tasks[index].barrier = barrier;
-            tasks[index].manager = &manager;
-        }
-
         //  Sync to wait on all processes.
         barrier->wait();
 
         printf("(%d) Waiting MPI\n", rank);
         MPI_Barrier(MPI_COMM_WORLD);
         barrier->wait();
-        barrier->wait();
 
-        if(rank == 1 && c == 3) {
-            printf("Launhing new task. on rank 1\n");
-            threads.push_back(std::thread(run_openmp, &tasks[tasks.size() - 1]));
-            task_count++;
-            barrier->resize(task_count + 1);
+        // Update was made in the start barrier, now is a safe time to update the normal barrier.
+        if(barrier->get_size() != start_barrier->get_size()) {
+            printf("Updating barrier size. Was: %d, now: %d\n", barrier->get_size(), start_barrier->get_size());
+            barrier->resize(start_barrier->get_size());
         }
+
+        printf("(%d) Waiting start barrier: size: %d\n", rank, start_barrier->get_size());
+        start_barrier->wait();
     }
 
     // Wait for all tasks to complete.
-    for(int i = 0; i < task_count; i++)
+    for(int i = 0; i < threads.size(); i++)
     {
         printf("(%d) Joining %d\n", rank, i);
         threads[i].join();
@@ -217,15 +202,15 @@ int main(int argc, char** argv)
         MPI_Abort(MPI_COMM_WORLD, 1);
     }
 
-
     int rank = init();
+
     // Parse command line args
-    std::thread manage_thread;
 
     int active_devices = 1;
     if(argc > 1) {
         active_devices = std::stoi(argv[1]);
     }
+
     // Distribute tasks evenly over nodes and devices.
     int gpu_count = init_cuda();
     int task_count = rank < active_devices ? gpu_count + 1 : 0;
@@ -233,17 +218,19 @@ int main(int argc, char** argv)
     printf("Rank: %d: Count GPU devices: %d. Tasks: %d\n", rank, gpu_count, task_count);
 
     Barrier barrier(task_count + 1);
+    Barrier start_barrier(task_count + 1);
 
     MPI_Comm manager_comm;
-    MPI_Comm_split(MPI_COMM_WORLD, 1, 0, &manager_comm);
+    MPI_Comm_split(MPI_COMM_WORLD, 1, rank, &manager_comm);
     printf("(%d): Manager comm after split: %p\n", rank, &manager_comm);
 
     std::vector<task_t> tasks;
     if(task_count > 0) {
-        init_tasks(tasks, task_count, &barrier, &manager_comm, active_devices);
+        init_tasks(tasks, task_count, &barrier, &start_barrier, &manager_comm, active_devices);
     }
 
-    if(rank == 0) {
+    std::thread manage_thread;
+    if(rank == MANAGER_RANK) {
         manage_thread = std::thread(manage_nodes, &manager_comm);
     }
 
@@ -291,6 +278,19 @@ int main(int argc, char** argv)
         }
     }
 
+    int iteration = 0;
+    std::vector<std::thread> threads;
+
+    manager_info_t info;
+    info.barrier = &barrier;
+    info.start_barrier = &start_barrier;
+    info.iteration = &iteration;
+    info.tasks = &tasks;
+    info.threads = &threads;
+    info.manager = &manager_comm;
+
+    std::thread device_thread = std::thread(listen_split, &info);
+
     //  Sync for 'equal' starts.
     fprintf(stderr, "(%d) Barrier\n", rank);
     MPI_Barrier(MPI_COMM_WORLD);
@@ -298,9 +298,9 @@ int main(int argc, char** argv)
     fprintf(stderr, "(%d) Starting\n", rank);
 
     // Run tasks
-    run_cthread_variant(rank, task_count, tasks, &barrier, manager_comm);
+    run_cthread_variant(rank, tasks, &barrier, &start_barrier, manager_comm, &device_thread, threads, &iteration);
 
-    for(int i = 0; i < task_count; i++)
+    for(int i = 0; i < tasks.size(); i++)
     {
         if(tasks[i].type == GPU) {
             dealloc_cuda(&tasks[i]);
@@ -314,24 +314,16 @@ int main(int argc, char** argv)
         }
     }
 
-    if(rank == 0)
+    int empty = 0;
+    MPI_Send(&empty, 1, MPI_INT, rank, TERMINATE, manager_comm);
+
+    if(rank == MANAGER_RANK)
     {
-        // TODO: readd check
-
-        // for (int i = 0; i < N; i++)
-        // {
-        //     int sum = A[i] + (i == 0 ? 0 : A[i - 1]) + (i == N - 1 ? 0 : A[i + 1]);
-        //     if(fabs(sum - C[i]) > 1e-5)
-        //     {
-        //         fprintf(stderr, "Result verification failed at element %d! Was: %f, should be: %f\n", i, C[i], sum);
-        //         exit(EXIT_FAILURE);
-        //     }
-        // }
-
-        int empty = 0;
         MPI_Send(&empty, 1, MPI_INT, MANAGER_RANK, TERMINATE, manager_comm);
         manage_thread.join();
     }
+
+    device_thread.join();
 
     MPI_Finalize();
 }

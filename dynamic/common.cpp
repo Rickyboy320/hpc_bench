@@ -40,7 +40,6 @@ int MPI_Recv_all(std::vector<MPI_Receive_req> &receives, MPI_Comm communicator, 
         {
             if(!receives[i].completed && probe_status.MPI_SOURCE == receives[i].source)
             {
-                printf("Matching tags..\n");
                 if(receives[i].tag_matcher(probe_status.MPI_TAG))
                 {
                     printf("(%d) Matched. Now receiving.\n", rank);
@@ -87,21 +86,21 @@ int construct_tag(int device_id, bool next, int tag)
 bool match_tag(int device_id, int next, int tag, int input) {
     if(device_id != -1) {
         if(input / 10000 != device_id) {
-            printf("Invalid device. Input: %d, device: %d, match: %d\n", input, device_id, input / 10000);
+            printf("Invalid device. Req. device: %d, actual: %d\n", input, device_id, input / 10000);
             return false;
         }
     }
 
     if(next != -1) {
         if(input % 2 != next) {
-            printf("Invalid next\n");
+            printf("Invalid next. Req: %d, actual: %d\n", next, input % 2);
             return false;
         }
     }
 
     if(tag != -1) {
         if((input % 10000) / 10 != tag) {
-            printf("Invalid tag\n");
+            printf("Invalid tag. Req: %d, actual: %d\n", tag, (input % 10000) / 10);
             return false;
         }
     }

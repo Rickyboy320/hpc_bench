@@ -19,6 +19,7 @@ void split(task_t* task, int rank, int target) //std::vector<task_t> tasks)
     new_task.C = &task->C[new_size];
     new_task.offset = task->offset + new_size;
     new_task.barrier = task->barrier;
+    new_task.start_barrier = task->start_barrier;
     new_task.prev.rank = rank;
     new_task.prev.id = task->id;
     new_task.next.rank = task->next.rank;
@@ -40,19 +41,21 @@ void split(task_t* task, int rank, int target) //std::vector<task_t> tasks)
         printf("(%d) Initiating task send to %d\n", rank, target);
 
         MPI_Status status;
-        MPI_Send(&new_task.size, 1, MPI_INT, target, SPLIT, MPI_COMM_WORLD);
-        MPI_Send(new_task.A, new_task.size + 2, MPI_FLOAT, target, SPLIT, MPI_COMM_WORLD);
-        MPI_Send(new_task.C, new_task.size, MPI_FLOAT, target, SPLIT, MPI_COMM_WORLD);
-        MPI_Send(&new_task.next.rank, 1, MPI_INT, target, SPLIT, MPI_COMM_WORLD);
-        MPI_Send(&new_task.next.id, 1, MPI_INT, target, SPLIT, MPI_COMM_WORLD);
-        MPI_Send(&new_task.prev.rank, 1, MPI_INT, target, SPLIT, MPI_COMM_WORLD);
-        MPI_Send(&new_task.prev.id, 1, MPI_INT, target, SPLIT, MPI_COMM_WORLD);
-        MPI_Send(&new_task.offset, 1, MPI_INT, target, SPLIT, MPI_COMM_WORLD);
+        MPI_Send(&new_task.size, 1, MPI_INT, target, SPLIT, *task->manager);
+        MPI_Send(new_task.A, new_task.size + 2, MPI_FLOAT, target, SPLIT, *task->manager);
+        MPI_Send(new_task.C, new_task.size, MPI_FLOAT, target, SPLIT, *task->manager);
+        MPI_Send(&new_task.next.rank, 1, MPI_INT, target, SPLIT, *task->manager);
+        MPI_Send(&new_task.next.id, 1, MPI_INT, target, SPLIT, *task->manager);
+        MPI_Send(&new_task.prev.rank, 1, MPI_INT, target, SPLIT, *task->manager);
+        MPI_Send(&new_task.prev.id, 1, MPI_INT, target, SPLIT, *task->manager);
+        MPI_Send(&new_task.offset, 1, MPI_INT, target, SPLIT, *task->manager);
 
-        MPI_Recv(&task->next.id, 1, MPI_INT, target, SPLIT, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Recv(&task->next.id, 1, MPI_INT, target, SPLIT, *task->manager, MPI_STATUS_IGNORE);
 
         MPI_Send(&task->id, 1, MPI_INT, MANAGER_RANK, UPDATE, *task->manager);
         MPI_Send(&task->size, 1, MPI_INT, MANAGER_RANK, UPDATE, *task->manager);
+
+        printf("(%d) Completed task send to %d\n", rank, target);
    //}
 }
 
@@ -64,17 +67,17 @@ void receive_split(int rank, int source, std::vector<task_t> &tasks, MPI_Comm& m
     int i = tasks.size() - 1;
 
     MPI_Status status;
-    MPI_Recv(&tasks[i].size, 1, MPI_INT, source, SPLIT, MPI_COMM_WORLD, &status);
+    MPI_Recv(&tasks[i].size, 1, MPI_INT, source, SPLIT, manager, &status);
     tasks[i].A = (float*) malloc((tasks[i].size + 2) * sizeof(float));
     tasks[i].C = (float*) malloc((tasks[i].size) * sizeof(float));
 
-    MPI_Recv(tasks[i].A, tasks[i].size + 2, MPI_FLOAT, source, SPLIT, MPI_COMM_WORLD, &status);
-    MPI_Recv(tasks[i].C, tasks[i].size, MPI_FLOAT, source, SPLIT, MPI_COMM_WORLD, &status);
-    MPI_Recv(&tasks[i].next.rank, 1, MPI_INT, source, SPLIT, MPI_COMM_WORLD, &status);
-    MPI_Recv(&tasks[i].next.id, 1, MPI_INT, source, SPLIT, MPI_COMM_WORLD, &status);
-    MPI_Recv(&tasks[i].prev.rank, 1, MPI_INT, source, SPLIT, MPI_COMM_WORLD, &status);
-    MPI_Recv(&tasks[i].prev.id, 1, MPI_INT, source, SPLIT, MPI_COMM_WORLD, &status);
-    MPI_Recv(&tasks[i].offset, 1, MPI_INT, source, SPLIT, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    MPI_Recv(tasks[i].A, tasks[i].size + 2, MPI_FLOAT, source, SPLIT, manager, &status);
+    MPI_Recv(tasks[i].C, tasks[i].size, MPI_FLOAT, source, SPLIT, manager, &status);
+    MPI_Recv(&tasks[i].next.rank, 1, MPI_INT, source, SPLIT, manager, &status);
+    MPI_Recv(&tasks[i].next.id, 1, MPI_INT, source, SPLIT, manager, &status);
+    MPI_Recv(&tasks[i].prev.rank, 1, MPI_INT, source, SPLIT, manager, &status);
+    MPI_Recv(&tasks[i].prev.id, 1, MPI_INT, source, SPLIT, manager, &status);
+    MPI_Recv(&tasks[i].offset, 1, MPI_INT, source, SPLIT, manager, MPI_STATUS_IGNORE);
     tasks[i].id = id++;
 
     tasks[i].A = &tasks[i].A[1];
@@ -85,9 +88,16 @@ void receive_split(int rank, int source, std::vector<task_t> &tasks, MPI_Comm& m
     printf("R-Task: prev: %d:%d\n", tasks[i].prev.rank, tasks[i].prev.rank);
     printf("R-Task: A: %p\n", tasks[i].A);
     printf("R-Task: C: %p\n", tasks[i].C);
+    for(int j = -1; j < tasks[i].size + 1; j++) {
+        printf("R: A[%d]: %f\n", j, tasks[i].A[j]);
+    }
+    for(int j = 0; j < tasks[i].size; j++) {
+        printf("R: C[%d]: %f\n", j, tasks[i].C[j]);
+    }
+
     printf("R-Task: offset: %d\n", tasks[i].offset);
 
-    MPI_Send(&tasks[i].id, 1, MPI_INT, source, SPLIT, MPI_COMM_WORLD);
+    MPI_Send(&tasks[i].id, 1, MPI_INT, source, SPLIT, manager);
 
     MPI_Send(&tasks[i].offset, 1, MPI_INT, MANAGER_RANK, REGISTER, manager);
     MPI_Send(&tasks[i].id, 1, MPI_INT, MANAGER_RANK, REGISTER, manager);
@@ -103,7 +113,7 @@ void fetch_and_update_neighbours(int rank, task_t* task, std::vector<MPI_Receive
         MPI_Request send_request;
         MPI_Request request;
 
-        MPI_Isend(&task->A[0], 1, MPI_FLOAT, prevref.rank, construct_tag(prevref.id, 1, will_split ? SPLIT : DEFAULT), MPI_COMM_WORLD, &send_request);
+        MPI_Isend(&task->A[0], 1, MPI_FLOAT, prevref.rank, construct_tag(prevref.id, 1, will_split ? WILL_SPLIT : DEFAULT), MPI_COMM_WORLD, &send_request);
         // MPI_Irecv(&task->A[-1], 1, MPI_FLOAT, prevref.rank, task->id * 100 + 0, MPI_COMM_WORLD, &request);
         requests.emplace_back();
         int i = requests.size() - 1;
@@ -121,7 +131,7 @@ void fetch_and_update_neighbours(int rank, task_t* task, std::vector<MPI_Receive
         MPI_Request send_request;
         MPI_Request request;
 
-        MPI_Isend(&task->A[task->size - 1], 1, MPI_FLOAT, nextref.rank, construct_tag(nextref.id, 0, will_split ? SPLIT : DEFAULT), MPI_COMM_WORLD, &send_request);
+        MPI_Isend(&task->A[task->size - 1], 1, MPI_FLOAT, nextref.rank, construct_tag(nextref.id, 0, will_split ? WILL_SPLIT : DEFAULT), MPI_COMM_WORLD, &send_request);
         // MPI_Irecv(&task->A[task->size], 1, MPI_FLOAT, nextref.rank, task->id * 100 + 1, MPI_COMM_WORLD, &request);
         requests.emplace_back();
         int i = requests.size() - 1;
@@ -136,7 +146,7 @@ void fetch_and_update_neighbours(int rank, task_t* task, std::vector<MPI_Receive
     }
 }
 
-void init_tasks(std::vector<task_t> &tasks, int task_count, Barrier* barrier, MPI_Comm* manager, int active_devices)
+void init_tasks(std::vector<task_t> &tasks, int task_count, Barrier* barrier, Barrier* start_barrier, MPI_Comm* manager, int active_devices)
 {
     int rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
@@ -175,6 +185,7 @@ void init_tasks(std::vector<task_t> &tasks, int task_count, Barrier* barrier, MP
         }
 
         tasks[i].barrier = barrier;
+        tasks[i].start_barrier = start_barrier;
         tasks[i].manager = manager;
         tasks[i].start_iteration = 0;
 
@@ -184,40 +195,14 @@ void init_tasks(std::vector<task_t> &tasks, int task_count, Barrier* barrier, MP
         }
 
         tasks[i].A = &tasks[i].A[1];
-        printf("Legal op: %f\n", tasks[i].A[-1]);
 
         tasks[i].C = (float*) malloc(sizeof(float) * tasks[i].size);
-        printf("task: %p\n", &tasks[i]);
     }
-
-    // Point to 'next' and 'prev' patch locations.
-    // for(int i = 0; i < task_count; i++) {
-    //     if(i == 0) {
-    //         if(rank == 0) {
-    //             tasks[i].prev.rank = -1;
-    //         } else {
-    //             tasks[i].prev.rank = rank - 1;
-    //         }
-    //     } else {
-    //         tasks[i].prev.rank = rank;
-    //     }
-
-    //     if(i == task_count - 1) {
-    //         if(rank == active_devices - 1) {
-    //             tasks[i].next.rank = -1;
-    //         } else {
-    //             tasks[i].next.rank = rank + 1;
-    //         }
-    //     } else {
-    //         tasks[i].next.rank = rank;
-    //     }
-    // }
 
     // Allocate GPU memory for the CUDA tasks
     int id = 0;
     for(int i = 0; i < tasks.size(); i++) {
         if(tasks[i].type == GPU) {
-            printf("Initing cuda task: %p, id: %d\n", &tasks[i], id);
             tasks[i].cuda.id = id;
             id++;
             alloc_cuda(&tasks[i]);

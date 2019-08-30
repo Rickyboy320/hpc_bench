@@ -1,7 +1,7 @@
 CC = mpic++
 NVCC = nvcc
 
-SRC = vector.cpp barrier.cpp task.cpp manager.cpp common.cpp
+SRC = vector.cpp barrier.cpp task.cpp manager.cpp common.cpp devicemanager.cpp
 NVSRC = vector.cu
 
 CC_FLAGS = -g -O3 -I/cm/shared/apps/cuda10.0/toolkit/10.0.130/include/ -L/cm/shared/apps/cuda10.0/toolkit/10.0.130/lib64

@@ -26,11 +26,35 @@ void Barrier::wait()
     }
 }
 
+int Barrier::get_size() {
+    return m_number_threads;
+}
+
+void Barrier::expand() {
+    std::unique_lock<std::mutex> lock(m_mtx);
+
+    resize_barrier(get_size() + 1);
+
+    lock.unlock();
+}
+
+void Barrier::shrink() {
+    std::unique_lock<std::mutex> lock(m_mtx);
+
+    resize_barrier(get_size() - 1);
+
+    lock.unlock();
+}
+
 void Barrier::resize(int new_size) {
     std::unique_lock<std::mutex> lock(m_mtx);
 
-    m_count = new_size - (m_number_threads - m_count);
-    m_number_threads = new_size;
+    resize_barrier(new_size);
 
     lock.unlock();
+}
+
+void Barrier::resize_barrier(int new_size) {
+    m_count = new_size - (m_number_threads - m_count);
+    m_number_threads = new_size;
 }

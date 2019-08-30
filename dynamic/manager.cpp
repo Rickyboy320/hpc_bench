@@ -67,13 +67,10 @@ void manage_nodes(void* v_comm)
     MPI_Comm* p_comm = (MPI_Comm*) v_comm;
     MPI_Comm manager_comm = *p_comm;
 
-    printf("Hello world, comm: %p\n", &manager_comm);
-
     while(true) {
         MPI_Status status;
 
         int buffer;
-        printf("Hello loop, comm: %p. World comm: %p\n", manager_comm, MPI_COMM_WORLD);
         MPI_Recv(&buffer, 1, MPI_INT, MPI_ANY_SOURCE, manager_comm, &status, MANAGER_TAGS, MANAGER_TAGS_LENGTH);
 
         if(status.MPI_TAG == REGISTER) {

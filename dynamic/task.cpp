@@ -5,11 +5,13 @@
 #include "task.h"
 #include "common.h"
 
-void split(task_t* task, int rank, int target) //std::vector<task_t> tasks)
+void split(task_t* task, int rank) //std::vector<task_t> tasks)
 {
     task_t new_task;
     int size = task->size;
     int new_size = floor(task->size / 2);
+
+    printf("(%d:%d) Task offset: %d, size: %d\n", rank, task->id, task->offset, task->size);
 
     task->size = new_size;
 
@@ -17,6 +19,7 @@ void split(task_t* task, int rank, int target) //std::vector<task_t> tasks)
     new_task.size = size - new_size;
     new_task.A = &task->A[new_size - 1];
     new_task.C = &task->C[new_size];
+
     new_task.offset = task->offset + new_size;
     new_task.barrier = task->barrier;
     new_task.start_barrier = task->start_barrier;
@@ -35,27 +38,33 @@ void split(task_t* task, int rank, int target) //std::vector<task_t> tasks)
         // MPI_Send(MANAGER, UPDATE, ...)
         // MPI_Send(MANAGER, REGISTER, ...);
     // } else {
-        // int target = findSomeFreeNode();
+        int target;
+        MPI_Send(&new_task.size, 1, MPI_INT, MANAGER_RANK, FREE, *task->manager);
+        MPI_Recv(&target, 1, MPI_INT, MANAGER_RANK, FREE, *task->manager, MPI_STATUS_IGNORE);
+
         task->next.rank = target;
 
-        printf("(%d) Initiating task send to %d\n", rank, target);
+        printf("(%d:%d) Initiating task send to %d. Offset: %d\n", rank, task->id, target, task->offset);
 
         MPI_Status status;
         MPI_Send(&new_task.size, 1, MPI_INT, target, SPLIT, *task->manager);
+        printf("(%d:%d) Pre: %d, size: %d\n", rank, task->id, task->offset, task->size);
         MPI_Send(new_task.A, new_task.size + 2, MPI_FLOAT, target, SPLIT, *task->manager);
         MPI_Send(new_task.C, new_task.size, MPI_FLOAT, target, SPLIT, *task->manager);
+        printf("(%d:%d) Post: %d, size: %d\n", rank, task->id, task->offset, task->size);
         MPI_Send(&new_task.next.rank, 1, MPI_INT, target, SPLIT, *task->manager);
         MPI_Send(&new_task.next.id, 1, MPI_INT, target, SPLIT, *task->manager);
         MPI_Send(&new_task.prev.rank, 1, MPI_INT, target, SPLIT, *task->manager);
         MPI_Send(&new_task.prev.id, 1, MPI_INT, target, SPLIT, *task->manager);
         MPI_Send(&new_task.offset, 1, MPI_INT, target, SPLIT, *task->manager);
 
+
         MPI_Recv(&task->next.id, 1, MPI_INT, target, SPLIT, *task->manager, MPI_STATUS_IGNORE);
 
         MPI_Send(&task->id, 1, MPI_INT, MANAGER_RANK, UPDATE, *task->manager);
         MPI_Send(&task->size, 1, MPI_INT, MANAGER_RANK, UPDATE, *task->manager);
 
-        printf("(%d) Completed task send to %d\n", rank, target);
+        printf("(%d) Completed task send to %d. Offset: %d, size: %d\n", rank, target, task->offset, task->size);
    //}
 }
 
@@ -66,18 +75,28 @@ void receive_split(int rank, int source, std::vector<task_t> &tasks, MPI_Comm& m
     tasks.emplace_back();
     int i = tasks.size() - 1;
 
+    printf("(%d) Index: %d\n", rank, i);
+    printf("(%d) @2 Dev:0 Offset: %d size: %d\n", rank, tasks[0].offset, tasks[0].size);
+
+
     MPI_Status status;
     MPI_Recv(&tasks[i].size, 1, MPI_INT, source, SPLIT, manager, &status);
     tasks[i].A = (float*) malloc((tasks[i].size + 2) * sizeof(float));
     tasks[i].C = (float*) malloc((tasks[i].size) * sizeof(float));
 
+    printf("(%d) @3 Dev:0 Offset: %d size: %d\n", rank, tasks[0].offset, tasks[0].size);
+
     MPI_Recv(tasks[i].A, tasks[i].size + 2, MPI_FLOAT, source, SPLIT, manager, &status);
     MPI_Recv(tasks[i].C, tasks[i].size, MPI_FLOAT, source, SPLIT, manager, &status);
-    MPI_Recv(&tasks[i].next.rank, 1, MPI_INT, source, SPLIT, manager, &status);
+     printf("(%d) @4 Dev:0 Offset: %d size: %d\n", rank, tasks[0].offset, tasks[0].size);
+   MPI_Recv(&tasks[i].next.rank, 1, MPI_INT, source, SPLIT, manager, &status);
     MPI_Recv(&tasks[i].next.id, 1, MPI_INT, source, SPLIT, manager, &status);
     MPI_Recv(&tasks[i].prev.rank, 1, MPI_INT, source, SPLIT, manager, &status);
+    printf("(%d) @5 Dev:0 Offset: %d size: %d\n", rank, tasks[0].offset, tasks[0].size);
     MPI_Recv(&tasks[i].prev.id, 1, MPI_INT, source, SPLIT, manager, &status);
+    printf("(%d) @6 Dev:0 Offset: %d size: %d\n", rank, tasks[0].offset, tasks[0].size);
     MPI_Recv(&tasks[i].offset, 1, MPI_INT, source, SPLIT, manager, MPI_STATUS_IGNORE);
+    printf("(%d) @7 Dev:0 Offset: %d size: %d\n", rank, tasks[0].offset, tasks[0].size);
     tasks[i].id = id++;
 
     tasks[i].A = &tasks[i].A[1];
@@ -85,7 +104,7 @@ void receive_split(int rank, int source, std::vector<task_t> &tasks, MPI_Comm& m
     printf("(%d) Received task of size: %d\n", rank, tasks[i].size);
     printf("R-Task: size: %d\n", tasks[i].size);
     printf("R-Task: next: %d:%d\n", tasks[i].next.rank, tasks[i].next.id);
-    printf("R-Task: prev: %d:%d\n", tasks[i].prev.rank, tasks[i].prev.rank);
+    printf("R-Task: prev: %d:%d\n", tasks[i].prev.rank, tasks[i].prev.id);
     printf("R-Task: A: %p\n", tasks[i].A);
     printf("R-Task: C: %p\n", tasks[i].C);
     for(int j = -1; j < tasks[i].size + 1; j++) {
@@ -113,6 +132,7 @@ void fetch_and_update_neighbours(int rank, task_t* task, std::vector<MPI_Receive
         MPI_Request send_request;
         MPI_Request request;
 
+        printf("(%d:%d) sending and receiving @ prev %d:%d. Split: %s\n", rank, task->id, prevref.rank, prevref.id, will_split ? "true" : "false");
         MPI_Isend(&task->A[0], 1, MPI_FLOAT, prevref.rank, construct_tag(prevref.id, 1, will_split ? WILL_SPLIT : DEFAULT), MPI_COMM_WORLD, &send_request);
         // MPI_Irecv(&task->A[-1], 1, MPI_FLOAT, prevref.rank, task->id * 100 + 0, MPI_COMM_WORLD, &request);
         requests.emplace_back();
@@ -122,8 +142,6 @@ void fetch_and_update_neighbours(int rank, task_t* task, std::vector<MPI_Receive
         requests[i].datatype = MPI_FLOAT;
         requests[i].source = prevref.rank;
         requests[i].tag_matcher = [task](int tag) { return match_tag(task->id, 0, -1, tag); };
-
-        printf("(%d:%d) sending and receiving @ prev %d:%d. Split: %s\n", rank, task->id, prevref.rank, prevref.id, will_split ? "true" : "false");
         types.push_back(PREV_TYPE);
     }
 
@@ -131,6 +149,7 @@ void fetch_and_update_neighbours(int rank, task_t* task, std::vector<MPI_Receive
         MPI_Request send_request;
         MPI_Request request;
 
+        printf("(%d:%d) sending and receiving @ next %d:%d. Split: %s\n", rank, task->id, nextref.rank, nextref.id, will_split ? "true" : "false");
         MPI_Isend(&task->A[task->size - 1], 1, MPI_FLOAT, nextref.rank, construct_tag(nextref.id, 0, will_split ? WILL_SPLIT : DEFAULT), MPI_COMM_WORLD, &send_request);
         // MPI_Irecv(&task->A[task->size], 1, MPI_FLOAT, nextref.rank, task->id * 100 + 1, MPI_COMM_WORLD, &request);
         requests.emplace_back();
@@ -140,8 +159,6 @@ void fetch_and_update_neighbours(int rank, task_t* task, std::vector<MPI_Receive
         requests[i].datatype = MPI_FLOAT;
         requests[i].source = nextref.rank;
         requests[i].tag_matcher = [task](int tag) { return match_tag(task->id, 1, -1, tag); };
-
-        printf("(%d:%d) sending and receiving @ next %d:%d. Split: %s\n", rank, task->id, nextref.rank, nextref.id, will_split ? "true" : "false");
         types.push_back(NEXT_TYPE);
     }
 }

@@ -24,16 +24,31 @@ void listen_split(void* v_info)
         MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, *info->manager, &status);
 
         if(status.MPI_TAG == SPLIT) {
-            start_barrier->expand();
-            receive_split(rank, status.MPI_SOURCE, tasks, *info->manager);
-            int index = tasks.size() - 1;
-            tasks[index].type = CPU;
-            tasks[index].start_iteration = *info->iteration + 1;
-            tasks[index].barrier = barrier;
-            tasks[index].start_barrier = start_barrier;
-            tasks[index].manager = info->manager;
+                if(tasks.size() > 0) {
+                    printf("(%d) Dev:0 Offset: %d size: %d\n", rank, tasks[0].offset, tasks[0].size);
+                }
+            // If free device:
+                start_barrier->expand();
+                receive_split(rank, status.MPI_SOURCE, tasks, *info->manager);
+                int index = tasks.size() - 1;
+                tasks[index].type = tasks[index].id == 0 ? CPU : GPU;
+                tasks[index].start_iteration = *info->iteration + 1;
+                tasks[index].barrier = barrier;
+                tasks[index].start_barrier = start_barrier;
+                tasks[index].manager = info->manager;
 
-            threads.push_back(std::thread(run_openmp, &tasks[tasks.size() - 1]));
+                if(tasks[index].type == GPU) {
+                    alloc_cuda(&tasks[index]);
+                    threads.push_back(std::thread(run_cuda, &tasks[tasks.size() - 1]));
+                } else if(tasks[index].type == CPU) {
+                    threads.push_back(std::thread(run_openmp, &tasks[tasks.size() - 1]));
+                } else {
+                    throw std::runtime_error("No device type for new task.");
+                }
+
+            // Else
+            // RECV
+            // Send(NO_SPACE);
         } else if(status.MPI_TAG == TERMINATE) {
             int buffer;
             MPI_Recv(&buffer, 1, MPI_INT, status.MPI_SOURCE, TERMINATE, *info->manager, &status);

@@ -65,7 +65,7 @@ void* run_cuda(void* v_task)
     for(; iteration < CYCLES; iteration++) {
         // Copy the host input vectors A and B H2D.
 
-        printf("A: %p, cudaA: %p, size: %d\n", task->cuda.A, &task->A[-1], (task->size + 2) * sizeof(float));
+        printf("(%d:%d) Task offset: %d, size: %d\n", rank, task->id, task->offset, task->size);
 
         int inset = 0;
         cudaCheck(cudaMemcpy(task->cuda.A, &task->A[-1], (task->size + 2) * sizeof(float), cudaMemcpyHostToDevice));
@@ -92,9 +92,10 @@ void* run_cuda(void* v_task)
             task->A[j] = task->C[j];
         }
 
-        int target = 1;
-        bool will_split = false;
+        bool will_split = false; //(iteration == 2 && rank == 1) || (iteration == 5 && rank == 0 && task->id == 1);// || () ;
+
         printf("(%d) Updating neighbours\n", rank);
+
         std::vector<MPI_Receive_req> requests;
         std::vector<int> types;
         fetch_and_update_neighbours(rank, task, requests, types, will_split);
@@ -111,7 +112,7 @@ void* run_cuda(void* v_task)
         // Split
         if(will_split) {
             // Arbitrarily (as a test) decide to split.
-            split(task, rank, target);
+            split(task, rank);
        }
 
         task->barrier->wait();

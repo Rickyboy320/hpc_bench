@@ -52,6 +52,8 @@ void* run_openmp(void* v_task)
     for(; iteration < CYCLES; iteration++) {
         int size = task->size;
 
+        printf("(%d:%d) Task offset: %d, size: %d\n", rank, task->id, task->offset, task->size);
+
         // Run task (sum neighbours) with OpenMP
         int i;
         #pragma omp parallel for private(i) shared(A,C)
@@ -71,9 +73,11 @@ void* run_openmp(void* v_task)
             A[j] = C[j];
         }
 
-        int target = 1;
-        bool will_split = iteration == 3 && rank == 0;
+        // Arbitrarily decide to split
+        bool will_split = (iteration == 3 && rank == 0) || (iteration == 8 && rank == 1);
+
         printf("(%d) Updating neighbours\n", rank);
+
         std::vector<MPI_Receive_req> requests;
         std::vector<int> types;
         fetch_and_update_neighbours(rank, task, requests, types, will_split);
@@ -89,8 +93,7 @@ void* run_openmp(void* v_task)
 
         // Split
         if(will_split) {
-             // Arbitrarily (as a test) decide to split.
-             split(task, rank, target);
+             split(task, rank);
         }
 
         task->barrier->wait();
@@ -101,13 +104,14 @@ void* run_openmp(void* v_task)
             if(match_tag(-1, -1, WILL_SPLIT, statuses[i].MPI_TAG)) {
                 // Received notification of split of target. Will update refs.
                 if(types[i] == NEXT_TYPE) {
-                    printf("(%d:%d) Update nextref\n", rank, id);
+                    printf("(%d:%d) Update nextref. Offset: %d, size: %d\n", rank, id, task->offset, task->size);
                     int start = task->offset + task->size;
                     MPI_Send(&start, 1, MPI_INT, MANAGER_RANK, LOOKUP, manager_comm);
                     int package[2];
                     MPI_Recv(&package, 2, MPI_INT, MANAGER_RANK, LOOKUP, manager_comm, MPI_STATUS_IGNORE);
                     task->next.rank = package[0];
                     task->next.id = package[1];
+                    printf("(%d:%d) New next: %d:%d\n", task->next.rank, task->next.id);
                 } else if(types[i] == PREV_TYPE) {
                     printf("(%d:%d) Update prevref\n", rank, id);
                     int start = task->offset - 1;
@@ -116,6 +120,7 @@ void* run_openmp(void* v_task)
                     MPI_Recv(&package, 2, MPI_INT, MANAGER_RANK, LOOKUP, manager_comm, MPI_STATUS_IGNORE);
                     task->prev.rank = package[0];
                     task->prev.id = package[1];
+                    printf("(%d:%d) New prev: %d:%d\n", task->prev.rank, task->prev.id);
                 } else {
                     throw std::runtime_error("Invalid SPLIT type received.");
                 }

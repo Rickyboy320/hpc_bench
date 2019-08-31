@@ -12,7 +12,7 @@ struct manager_info_t {
     int* iteration;
     MPI_Comm* manager;
 
-    std::vector<task_t>* tasks;
+    std::vector<task_t*>* tasks;
     std::vector<std::thread>* threads;
 };
 

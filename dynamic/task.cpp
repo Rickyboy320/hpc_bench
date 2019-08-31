@@ -38,9 +38,10 @@ void split(task_t* task, int rank) //std::vector<task_t> tasks)
         // MPI_Send(MANAGER, UPDATE, ...)
         // MPI_Send(MANAGER, REGISTER, ...);
     // } else {
+        int tag = construct_tag(task->id, 0, FREE);
         int target;
-        MPI_Send(&new_task.size, 1, MPI_INT, MANAGER_RANK, FREE, *task->manager);
-        MPI_Recv(&target, 1, MPI_INT, MANAGER_RANK, FREE, *task->manager, MPI_STATUS_IGNORE);
+        MPI_Send(&new_task.size, 1, MPI_INT, MANAGER_RANK, tag, *task->manager);
+        MPI_Recv(&target, 1, MPI_INT, MANAGER_RANK, tag, *task->manager, MPI_STATUS_IGNORE);
 
         task->next.rank = target;
 
@@ -61,66 +62,59 @@ void split(task_t* task, int rank) //std::vector<task_t> tasks)
 
         MPI_Recv(&task->next.id, 1, MPI_INT, target, SPLIT, *task->manager, MPI_STATUS_IGNORE);
 
-        MPI_Send(&task->id, 1, MPI_INT, MANAGER_RANK, UPDATE, *task->manager);
-        MPI_Send(&task->size, 1, MPI_INT, MANAGER_RANK, UPDATE, *task->manager);
+        tag = construct_tag(task->id, 0, UPDATE);
+        MPI_Send(&task->id, 1, MPI_INT, MANAGER_RANK, tag, *task->manager);
+        MPI_Send(&task->size, 1, MPI_INT, MANAGER_RANK, tag, *task->manager);
 
         printf("(%d) Completed task send to %d. Offset: %d, size: %d\n", rank, target, task->offset, task->size);
    //}
 }
 
-void receive_split(int rank, int source, std::vector<task_t> &tasks, MPI_Comm& manager)
+void receive_split(int rank, int source, std::vector<task_t*> &tasks, MPI_Comm& manager)
 {
     printf("(%d) Initiating task receive from %d\n", rank, source);
 
-    tasks.emplace_back();
-    int i = tasks.size() - 1;
-
-    printf("(%d) Index: %d\n", rank, i);
-    printf("(%d) @2 Dev:0 Offset: %d size: %d\n", rank, tasks[0].offset, tasks[0].size);
-
+    task_t* task = (task_t*) malloc(sizeof(task_t));
 
     MPI_Status status;
-    MPI_Recv(&tasks[i].size, 1, MPI_INT, source, SPLIT, manager, &status);
-    tasks[i].A = (float*) malloc((tasks[i].size + 2) * sizeof(float));
-    tasks[i].C = (float*) malloc((tasks[i].size) * sizeof(float));
+    MPI_Recv(&task->size, 1, MPI_INT, source, SPLIT, manager, &status);
+    task->A = (float*) malloc((task->size + 2) * sizeof(float));
+    task->C = (float*) malloc((task->size) * sizeof(float));
 
-    printf("(%d) @3 Dev:0 Offset: %d size: %d\n", rank, tasks[0].offset, tasks[0].size);
+    MPI_Recv(task->A, task->size + 2, MPI_FLOAT, source, SPLIT, manager, &status);
+    MPI_Recv(task->C, task->size, MPI_FLOAT, source, SPLIT, manager, &status);
+    MPI_Recv(&task->next.rank, 1, MPI_INT, source, SPLIT, manager, &status);
+    MPI_Recv(&task->next.id, 1, MPI_INT, source, SPLIT, manager, &status);
+    MPI_Recv(&task->prev.rank, 1, MPI_INT, source, SPLIT, manager, &status);
+    MPI_Recv(&task->prev.id, 1, MPI_INT, source, SPLIT, manager, &status);
+    MPI_Recv(&task->offset, 1, MPI_INT, source, SPLIT, manager, MPI_STATUS_IGNORE);
+    task->id = id++;
 
-    MPI_Recv(tasks[i].A, tasks[i].size + 2, MPI_FLOAT, source, SPLIT, manager, &status);
-    MPI_Recv(tasks[i].C, tasks[i].size, MPI_FLOAT, source, SPLIT, manager, &status);
-     printf("(%d) @4 Dev:0 Offset: %d size: %d\n", rank, tasks[0].offset, tasks[0].size);
-   MPI_Recv(&tasks[i].next.rank, 1, MPI_INT, source, SPLIT, manager, &status);
-    MPI_Recv(&tasks[i].next.id, 1, MPI_INT, source, SPLIT, manager, &status);
-    MPI_Recv(&tasks[i].prev.rank, 1, MPI_INT, source, SPLIT, manager, &status);
-    printf("(%d) @5 Dev:0 Offset: %d size: %d\n", rank, tasks[0].offset, tasks[0].size);
-    MPI_Recv(&tasks[i].prev.id, 1, MPI_INT, source, SPLIT, manager, &status);
-    printf("(%d) @6 Dev:0 Offset: %d size: %d\n", rank, tasks[0].offset, tasks[0].size);
-    MPI_Recv(&tasks[i].offset, 1, MPI_INT, source, SPLIT, manager, MPI_STATUS_IGNORE);
-    printf("(%d) @7 Dev:0 Offset: %d size: %d\n", rank, tasks[0].offset, tasks[0].size);
-    tasks[i].id = id++;
+    task->A = &task->A[1];
 
-    tasks[i].A = &tasks[i].A[1];
-
-    printf("(%d) Received task of size: %d\n", rank, tasks[i].size);
-    printf("R-Task: size: %d\n", tasks[i].size);
-    printf("R-Task: next: %d:%d\n", tasks[i].next.rank, tasks[i].next.id);
-    printf("R-Task: prev: %d:%d\n", tasks[i].prev.rank, tasks[i].prev.id);
-    printf("R-Task: A: %p\n", tasks[i].A);
-    printf("R-Task: C: %p\n", tasks[i].C);
-    for(int j = -1; j < tasks[i].size + 1; j++) {
-        printf("R: A[%d]: %f\n", j, tasks[i].A[j]);
+    printf("(%d) Received task of size: %d\n", rank, task->size);
+    printf("R-Task: size: %d\n", task->size);
+    printf("R-Task: next: %d:%d\n", task->next.rank, task->next.id);
+    printf("R-Task: prev: %d:%d\n", task->prev.rank, task->prev.id);
+    printf("R-Task: A: %p\n", task->A);
+    printf("R-Task: C: %p\n", task->C);
+    for(int j = -1; j < task->size + 1; j++) {
+        printf("R: A[%d]: %f\n", j, task->A[j]);
     }
-    for(int j = 0; j < tasks[i].size; j++) {
-        printf("R: C[%d]: %f\n", j, tasks[i].C[j]);
+    for(int j = 0; j < task->size; j++) {
+        printf("R: C[%d]: %f\n", j, task->C[j]);
     }
 
-    printf("R-Task: offset: %d\n", tasks[i].offset);
+    printf("R-Task: offset: %d\n", task->offset);
 
-    MPI_Send(&tasks[i].id, 1, MPI_INT, source, SPLIT, manager);
+    MPI_Send(&task->id, 1, MPI_INT, source, SPLIT, manager);
 
-    MPI_Send(&tasks[i].offset, 1, MPI_INT, MANAGER_RANK, REGISTER, manager);
-    MPI_Send(&tasks[i].id, 1, MPI_INT, MANAGER_RANK, REGISTER, manager);
-    MPI_Send(&tasks[i].size, 1, MPI_INT, MANAGER_RANK, REGISTER, manager);
+    int tag = construct_tag(task->id, 0, REGISTER);
+    MPI_Send(&task->offset, 1, MPI_INT, MANAGER_RANK, tag, manager);
+    MPI_Send(&task->id, 1, MPI_INT, MANAGER_RANK, tag, manager);
+    MPI_Send(&task->size, 1, MPI_INT, MANAGER_RANK, tag, manager);
+
+    tasks.push_back(task);
 }
 
 void fetch_and_update_neighbours(int rank, task_t* task, std::vector<MPI_Receive_req> &requests, std::vector<int> &types, bool will_split)
@@ -163,7 +157,7 @@ void fetch_and_update_neighbours(int rank, task_t* task, std::vector<MPI_Receive
     }
 }
 
-void init_tasks(std::vector<task_t> &tasks, int task_count, Barrier* barrier, Barrier* start_barrier, MPI_Comm* manager, int active_devices)
+void init_tasks(std::vector<task_t*> &tasks, int task_count, Barrier* barrier, Barrier* start_barrier, MPI_Comm* manager, int active_devices)
 {
     int rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
@@ -177,52 +171,45 @@ void init_tasks(std::vector<task_t> &tasks, int task_count, Barrier* barrier, Ba
 
     printf("(%d) Length: %d\n", rank, length);
 
-    // float* A = (float*) malloc(sizeof(float) * (length + 2));
-    // float* C = (float*) malloc(sizeof(float) * length);
-    // for (int i = 0; i < length + 2; i++)
-    // {
-    //     A[i] = 1;
-    // }
-
     int sizePerDevice = ceil(length / task_count);
     for(int i = 0; i < task_count; i++)
     {
-        tasks.emplace_back();
-        tasks[i].type = i == 0 ? CPU : GPU;
-        tasks[i].id = id++;
+        task_t* task = (task_t*) malloc(sizeof(task_t));
+        task->type = i == 0 ? CPU : GPU;
+        task->id = id++;
         int offset = sizePerDevice * i;
-        tasks[i].offset = offset + start;
-        // tasks[i].A = &A[offset + 1];
-        // tasks[i].C = &C[offset];
+        task->offset = offset + start;
 
         if(i == task_count - 1) {
-            tasks[i].size = length - sizePerDevice * (task_count - 1);
+            task->size = length - sizePerDevice * (task_count - 1);
         } else {
-            tasks[i].size = sizePerDevice;
+            task->size = sizePerDevice;
         }
 
-        tasks[i].barrier = barrier;
-        tasks[i].start_barrier = start_barrier;
-        tasks[i].manager = manager;
-        tasks[i].start_iteration = 0;
+        task->barrier = barrier;
+        task->start_barrier = start_barrier;
+        task->manager = manager;
+        task->start_iteration = 0;
 
-        tasks[i].A = (float*) malloc(sizeof(float) * (tasks[i].size + 2));
-        for(int j = 0; j < tasks[i].size + 2; j++) {
-            tasks[i].A[j] = 1;
+        task->A = (float*) malloc(sizeof(float) * (task->size + 2));
+        for(int j = 0; j < task->size + 2; j++) {
+            task->A[j] = 1;
         }
 
-        tasks[i].A = &tasks[i].A[1];
+        task->A = &task->A[1];
 
-        tasks[i].C = (float*) malloc(sizeof(float) * tasks[i].size);
+        task->C = (float*) malloc(sizeof(float) * task->size);
+
+        tasks.push_back(task);
     }
 
     // Allocate GPU memory for the CUDA tasks
     int id = 0;
     for(int i = 0; i < tasks.size(); i++) {
-        if(tasks[i].type == GPU) {
-            tasks[i].cuda.id = id;
+        if(tasks[i]->type == GPU) {
+            tasks[i]->cuda.id = id;
             id++;
-            alloc_cuda(&tasks[i]);
+            alloc_cuda(tasks[i]);
         }
     }
 }

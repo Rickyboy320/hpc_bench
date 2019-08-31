@@ -71,16 +71,23 @@ void manage_nodes(void* v_comm)
         MPI_Status status;
 
         int buffer;
-        MPI_Recv(&buffer, 1, MPI_INT, MPI_ANY_SOURCE, manager_comm, &status, MANAGER_TAGS, MANAGER_TAGS_LENGTH);
+        MPI_Recv(&buffer, 1, MPI_INT, MPI_ANY_SOURCE, manager_comm, &status, [](int tag) {
+            for(int i = 0; i < MANAGER_TAGS_LENGTH; i++) {
+                if(match_tag(-1, -1, MANAGER_TAGS[i], tag)) {
+                    return true;
+                }
+            }
+            return false;
+        });
 
-        if(status.MPI_TAG == REGISTER) {
+        if(match_tag(-1, -1, REGISTER, status.MPI_TAG)) {
             int source = status.MPI_SOURCE;
 
             int deviceID;
-            MPI_Recv(&deviceID, 1, MPI_INT, status.MPI_SOURCE, REGISTER, manager_comm, MPI_STATUS_IGNORE);
+            MPI_Recv(&deviceID, 1, MPI_INT, status.MPI_SOURCE, status.MPI_TAG, manager_comm, MPI_STATUS_IGNORE);
 
             int length;
-            MPI_Recv(&length, 1, MPI_INT, status.MPI_SOURCE, REGISTER, manager_comm, MPI_STATUS_IGNORE);
+            MPI_Recv(&length, 1, MPI_INT, status.MPI_SOURCE, status.MPI_TAG, manager_comm, MPI_STATUS_IGNORE);
 
             registration_t* reg = new registration_t();
             reg->start = buffer;
@@ -90,37 +97,37 @@ void manage_nodes(void* v_comm)
             registrations.push_back(reg);
 
             printf("Received registration. Rank %d, device: %d starts at %d, length: %d\n", source, deviceID, buffer, length);
-        } else if(status.MPI_TAG == DEVICES) {
+        } else if(match_tag(-1, -1, DEVICES, status.MPI_TAG)) {
             int source = status.MPI_SOURCE;
             int num_devices = buffer;
             device_map.insert({source, num_devices});
 
             printf("Received device count. Rank %d has %d devices\n", source, num_devices);
-        } else if(status.MPI_TAG == UPDATE) {
+        } else if(match_tag(-1, -1, UPDATE, status.MPI_TAG)) {
             int source = status.MPI_SOURCE;
             int deviceID = buffer;
             int size;
-            MPI_Recv(&size, 1, MPI_INT, status.MPI_SOURCE, UPDATE, manager_comm, MPI_STATUS_IGNORE);
+            MPI_Recv(&size, 1, MPI_INT, status.MPI_SOURCE, status.MPI_TAG, manager_comm, MPI_STATUS_IGNORE);
             registration_t* reg = get_registration(source, deviceID);
             reg->size = size;
 
             printf("Received update. Rank %d, device %d now has length: %d\n", source, deviceID, size);
-        } else if(status.MPI_TAG == LOOKUP) {
+        } else if(match_tag(-1, -1, LOOKUP, status.MPI_TAG)) {
             int source = status.MPI_SOURCE;
             int start = buffer;
             registration_t* registration = find(start);
 
             printf("Received and sent lookup. Rank %d requests node at %d. Found: %d: %d\n", source, start, registration->rank, registration->deviceID);
             int package[2] = {registration->rank, registration->deviceID};
-            MPI_Send(package, 2, MPI_INT, source, LOOKUP, manager_comm);
-        } else if(status.MPI_TAG == FREE) {
+            MPI_Send(package, 2, MPI_INT, source, status.MPI_TAG, manager_comm);
+        } else if(match_tag(-1, -1, FREE, status.MPI_TAG)) {
             int source = status.MPI_SOURCE;
             int size = buffer;
             int rank = find_available(size, manager_comm);
             printf("Received free node request. Rank %d requests buffer size of %d. Found: %d\n", source, size, rank);
 
-            MPI_Send(&rank, 1, MPI_INT, source, FREE, manager_comm);
-        } else if(status.MPI_TAG == TERMINATE) {
+            MPI_Send(&rank, 1, MPI_INT, source, status.MPI_TAG, manager_comm);
+        } else if(match_tag(-1, -1, TERMINATE, status.MPI_TAG)) {
             pthread_exit(NULL);
         } else {
             printf("Received invalid tag: %d\n", status.MPI_TAG);

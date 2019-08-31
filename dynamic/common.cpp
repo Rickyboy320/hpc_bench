@@ -78,29 +78,24 @@ int construct_tag(int device_id, bool next, int tag)
         throw std::runtime_error("Invalid tag. Tag should be less than 1000.");
     }
 
-    printf("Input: %d, %d, %d. Output: %d\n", device_id, next, tag, device_id * 10000 + tag + next);
-
     return device_id * 10000 + tag * 10 + next;
 }
 
 bool match_tag(int device_id, int next, int tag, int input) {
     if(device_id != -1) {
         if(input / 10000 != device_id) {
-            printf("Invalid device. Req. device: %d, actual: %d\n", input, device_id, input / 10000);
             return false;
         }
     }
 
     if(next != -1) {
         if(input % 2 != next) {
-            printf("Invalid next. Req: %d, actual: %d\n", next, input % 2);
             return false;
         }
     }
 
     if(tag != -1) {
         if((input % 10000) / 10 != tag) {
-            printf("Invalid tag. Req: %d, actual: %d\n", tag, (input % 10000) / 10);
             return false;
         }
     }
